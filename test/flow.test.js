@@ -9,6 +9,7 @@ process.env.PAYPAL_CLIENT_ID = '';
 process.env.PAYPAL_CLIENT_SECRET = '';
 process.env.GOOGLE_GENERATIVE_AI_API_KEY = '';
 process.env.ANTHROPIC_API_KEY = '';
+process.env.GROQ_API_KEY = '';
 
 const store = await import('../src/store.js');
 const B = await import('../src/bookings.js');
@@ -34,8 +35,8 @@ test('lead to paid deposit to balance with tip to repeat business', async () => 
   assert.match(r, /first name/i);
   r = await say(lead.id, 'Sarah');
   assert.match(r, /Total \$260/);
-  assert.match(r, /due now: \$50 deposit/);
-  assert.match(r, /free to cancel or move until/);
+  assert.match(r, /Due now: a \$50 deposit/);
+  assert.match(r, /Free to cancel or move until/);
 
   const b = B.activeBookingForLead(lead.id);
   assert.equal(b.status, 'held');
@@ -124,6 +125,30 @@ test('split the deposit two ways confirms only when both pay', async () => {
   assert.equal(store.getBooking(r.booking.id).status, 'held');
   B.completeDemoPayment(pending[1].id);
   assert.equal(store.getBooking(r.booking.id).status, 'confirmed');
+});
+
+test('next-day bookings never show a free-cancel deadline that already passed', () => {
+  const now = Date.now();
+  const soon = new Date(now + 20 * 3600 * 1000).toISOString(); // tomorrow, inside 24 hours
+  const later = new Date(now + 72 * 3600 * 1000).toISOString();
+  assert.ok(Date.parse(B.freeCancelDeadline(soon, now)) >= now + 59 * 60 * 1000);
+  assert.equal(B.freeCancelDeadline(later, now), new Date(Date.parse(later) - 24 * 3600 * 1000).toISOString());
+});
+
+test('payment page questions get real answers, not actions', async () => {
+  store.resetAll();
+  const lead = store.createLead({ presetId: 'cleaning' });
+  const s = B.availableSlots(B.currentBusiness(), { limit: 3 })[2];
+  const { booking } = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: 'deep', size: '3 bedrooms', slotStart: s.start, customerName: 'Sarah' });
+  let r = await say(lead.id, 'Is this refundable?');
+  assert.match(r, /Cancel by .* comes right back/);
+  assert.equal(store.getBooking(booking.id).status, 'held'); // nothing canceled
+  r = await say(lead.id, 'Can I pay over time?');
+  assert.match(r, /Pay Later/);
+  r = await say(lead.id, 'Someone else is paying for this');
+  assert.match(r, /\/p\/pay_/);
+  r = await say(lead.id, 'Can we change the time?');
+  assert.match(r, /Reply 1, 2 or 3/);
 });
 
 test('business cancel offers new times; customer refund on request', async () => {

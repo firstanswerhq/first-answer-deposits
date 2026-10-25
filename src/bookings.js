@@ -65,6 +65,15 @@ export function totals(booking) {
   return { total, paid, due, tips: tipsGross, refunded, depositPaid: round2(depositPaid) };
 }
 
+// Free to cancel until 24 hours before the job. Last-minute bookings still get an hour to change their mind,
+// so nobody is ever shown a free-cancel deadline that has already passed.
+export function freeCancelDeadline(slotStart, fromMs = Date.now()) {
+  const slot = Date.parse(slotStart);
+  const standard = slot - 24 * 3600 * 1000;
+  const grace = Math.min(fromMs + 3600 * 1000, slot - 30 * 60 * 1000);
+  return new Date(Math.max(standard, grace)).toISOString();
+}
+
 export function freeCancelLabel(booking) {
   const tz = businessOf(booking).timezone;
   return formatSlot(booking.freeCancelUntil, tz) + ' ' + tzAbbrev(booking.freeCancelUntil, tz);
@@ -78,11 +87,11 @@ function tzAbbrev(iso, timeZone) {
 // The plain-words terms the customer sees before any money moves.
 export function termsLine(booking) {
   const t = totals(booking);
-  const parts = [`Total ${usd(t.total)}`];
-  if (booking.deposit > 0 && t.depositPaid < booking.deposit) parts.push(`due now: ${usd(booking.deposit)} deposit (counts toward the bill)`);
-  parts.push(`balance after the job: ${usd(Math.max(0, t.total - Math.max(t.paid, booking.deposit)))}`);
-  parts.push(`free to cancel or move until ${freeCancelLabel(booking)}`);
-  return parts.join(' · ');
+  const parts = [`Total ${usd(t.total)}.`];
+  if (booking.deposit > 0 && t.depositPaid < booking.deposit) parts.push(`Due now: a ${usd(booking.deposit)} deposit that counts toward the bill.`);
+  parts.push(`Balance after the job: ${usd(Math.max(0, t.total - Math.max(t.paid, booking.deposit)))}.`);
+  parts.push(`Free to cancel or move until ${freeCancelLabel(booking)}.`);
+  return parts.join(' ');
 }
 
 export function bookingPageUrl(booking) {
@@ -163,11 +172,11 @@ export async function bookAndRequestDeposit({ leadId, serviceId, size, slotStart
     deposit: q.deposit,
     slotStart,
     slotLabel: formatSlot(slotStart, business.timezone),
-    freeCancelUntil: new Date(Date.parse(slotStart) - 24 * 3600 * 1000).toISOString(),
+    freeCancelUntil: freeCancelDeadline(slotStart),
     status: q.deposit > 0 ? 'held' : 'confirmed',
   });
   store.addTimeline(booking.id, `Quoted ${q.service} (${q.size}) at ${usd(q.price)} and held ${booking.slotLabel}.`);
-  store.addTimeline(booking.id, `Terms shown to customer: ${termsLine(booking)}.`);
+  store.addTimeline(booking.id, `Terms shown to customer: ${termsLine(booking)}`);
 
   if (q.deposit <= 0) {
     store.logActivity(`Booked ${booking.customerName}: ${booking.service} on ${booking.slotLabel} (no deposit needed).`, { bookingId: booking.id });
@@ -207,7 +216,7 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
   if (p.kind === 'deposit') {
     if (b.status === 'held' && t.depositPaid + 0.001 >= b.deposit) {
       store.updateBooking(b.id, { status: 'confirmed', confirmedAt: new Date().toISOString() });
-      store.addMessage(b.leadId, 'assistant', `Got your ${usd(b.deposit)} deposit${who}, thank you! You're confirmed for ${b.service} on ${b.slotLabel}. ${termsLine(store.getBooking(b.id))}. Your booking: ${bookingPageUrl(b)}`, { kind: 'confirmation' });
+      store.addMessage(b.leadId, 'assistant', `Got your ${usd(b.deposit)} deposit${who}, thank you! You're confirmed for ${b.service} on ${b.slotLabel}. ${termsLine(store.getBooking(b.id))} Your booking: ${bookingPageUrl(b)}`, { kind: 'confirmation' });
       store.logActivity(`Deposit paid: ${usd(b.deposit)} from ${b.customerName}${who}. ${b.slotLabel} is confirmed.`, { bookingId: b.id, kind: 'deposit_paid' });
     } else if (b.status === 'held') {
       store.addMessage(b.leadId, 'assistant', `Got ${usd(p.amount)}${who} toward the deposit. ${usd(round2(b.deposit - t.depositPaid))} to go and you're confirmed.`, { kind: 'partial' });
@@ -414,7 +423,7 @@ export async function reschedule(bookingId, newSlotStart, { notify = true } = {}
   store.updateBooking(b.id, {
     slotStart: newSlotStart,
     slotLabel: label,
-    freeCancelUntil: new Date(Date.parse(newSlotStart) - 24 * 3600 * 1000).toISOString(),
+    freeCancelUntil: freeCancelDeadline(newSlotStart),
     status: nextStatus,
     rescheduledFrom: old.label,
   });

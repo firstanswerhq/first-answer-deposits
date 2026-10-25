@@ -1,10 +1,11 @@
-import { api, money, linkify, listen, $, escapeHtml, clock } from './common.js';
+import { api, money, linkify, listen, $, escapeHtml, clock, ask, toast } from './common.js';
 
 const code = new URLSearchParams(location.search).get('code') || '';
 const hdr = code ? { 'x-owner-passcode': code } : {};
 let seenOwner = 0;
 let busy = false;
 let refreshTimer = null;
+let lastState = null;
 
 const ACTIONS = {
   held: [['remind', 'Remind'], ['release', 'Release']],
@@ -17,7 +18,7 @@ const ACTIONS = {
 function kpis(s) {
   const tiles = [
     ['New leads', s.leads],
-    ['Avg first reply', s.avgFirstReplySec === null ? '—' : `${s.avgFirstReplySec}s`],
+    ['Avg first reply', s.avgFirstReplySec === null ? '—' : s.avgFirstReplySec < 1 ? '&lt;1s' : `${s.avgFirstReplySec}s`],
     ['Deposits waiting', s.held],
     ['Confirmed', s.confirmed],
     ['Money in (30 days)', money(s.money.gross)],
@@ -64,6 +65,7 @@ function ownerThread(msgs) {
 
 async function refresh() {
   const s = await api('/api/owner/state', { headers: hdr });
+  lastState = s;
   $('#biz').innerHTML = s.presets.map((p) => `<option value="${p.id}" ${p.id === s.business.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
   $('#pp-badge').textContent = `PayPal: ${s.health.paypal}`;
   $('#ai-badge').textContent = `AI: ${s.health.ai}`;
@@ -126,18 +128,46 @@ $('#bookings').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const { act, id } = b.dataset;
+  const bk = lastState?.bookings.find((x) => x.id === id);
+  const name = bk?.customerName || 'this customer';
   const body = {};
   if (act === 'cash') {
-    const amt = prompt('How much did they pay in cash?');
+    const amt = await ask({
+      title: 'Record a cash or check payment',
+      text: `How much did ${name} pay outside PayPal? Any open payment link is turned off so nobody gets chased twice.`,
+      input: { prefix: '$', inputmode: 'decimal', value: bk ? bk.totals.due : '' },
+      ok: 'Record it',
+    });
     if (!amt) return;
-    body.amount = Number(amt.replace(/[^0-9.]/g, ''));
+    body.amount = Number(String(amt).replace(/[^0-9.]/g, ''));
+    if (!body.amount) return toast('Enter an amount, like 210.', 'bad');
   }
-  if (act === 'refund' && !confirm('Refund this customer through PayPal?')) return;
+  if (act === 'refund') {
+    const okRefund = await ask({
+      title: `Refund ${name}?`,
+      text: `${money(bk ? bk.totals.paid : 0)} goes back through PayPal to the account they paid with, and they get a text with the reference number.`,
+      ok: 'Refund',
+      danger: true,
+    });
+    if (!okRefund) return;
+  }
+  if (act === 'cancel') {
+    const reason = await ask({
+      title: `Cancel ${name}'s appointment?`,
+      text: `We'll text ${name} three new times or a full refund, their choice. They're never charged for your cancellation.`,
+      input: { placeholder: 'Reason (optional), like "truck broke down"', optional: true },
+      ok: 'Cancel and text them',
+      danger: true,
+    });
+    if (reason === null) return;
+    body.reason = reason;
+  }
   b.disabled = true;
   try {
     await api(`/api/owner/bookings/${id}/${act}`, { method: 'POST', body, headers: hdr });
+    toast({ remind: `Reminder sent to ${name}.`, refund: `Refund sent to ${name}.`, done: `Marked done. ${name} got the balance link.`, cancel: `${name} got new times and a refund option.`, release: `Released ${name}'s hold.`, cash: `Recorded the payment from ${name}.` }[act] || 'Done.');
   } catch (err) {
-    alert(err.message);
+    toast(err.message, 'bad');
   }
   refresh();
 });
@@ -146,7 +176,7 @@ $('#biz').addEventListener('change', async (e) => {
   refresh();
 });
 $('#reset').addEventListener('click', async () => {
-  if (!confirm('Clear all demo bookings and messages?')) return;
+  if (!(await ask({ title: 'Start the demo over?', text: 'This clears every demo booking, message and payment.', ok: 'Clear it', danger: true }))) return;
   await api('/api/owner/reset', { method: 'POST', headers: hdr });
   seenOwner = 0;
   refresh();

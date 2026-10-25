@@ -175,16 +175,21 @@ export async function ownerCommand(text) {
       .slice(-12)
       .map((x) => ({ role: x.role === 'owner' ? 'user' : 'assistant', content: x.text }));
     while (history.length && history[0].role !== 'user') history.shift();
-    const result = await generateText({
-      model: m.model,
-      system: systemPrompt(business),
-      messages: history,
-      tools: ownerTools(business),
-      stopWhen: stepCountIs(8),
-      temperature: 0.2,
-      maxOutputTokens: 500,
-    });
-    reply = (result.text || '').trim() || 'Done.';
+    try {
+      const result = await generateText({
+        model: m.model,
+        system: systemPrompt(business),
+        messages: history,
+        tools: ownerTools(business),
+        stopWhen: stepCountIs(8),
+        temperature: 0.2,
+        maxOutputTokens: 500,
+      });
+      reply = (result.text || '').trim() || 'Done.';
+    } catch (err) {
+      console.error(`Owner AI failed (${m.name}): ${err.message}. Using the scripted reply.`);
+      reply = await scriptedOwnerReply(text);
+    }
   }
   store.addOwnerMessage('assistant', reply);
   return reply;

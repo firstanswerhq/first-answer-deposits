@@ -24,6 +24,25 @@ function detectSize(service, text) {
   );
 }
 
+// "Is this refundable?" / "What if I cancel?" get the terms they agreed to, not an action.
+function policyAnswer(booking) {
+  const t = B.totals(booking);
+  const deadline = B.freeCancelLabel(booking);
+  if (booking.status === 'completed') {
+    return `This is the balance for work that's already done. If anything wasn't right, tell me what happened and I'll get the owner on it right away.`;
+  }
+  const what = t.paid > 0 ? `the ${B.usd(t.paid)} you paid` : `your ${B.usd(booking.deposit)} deposit`;
+  return Date.now() <= Date.parse(booking.freeCancelUntil)
+    ? `Yes. Cancel by ${deadline} and ${what} comes right back to you. After that the deposit is kept, since the time is saved just for you. Moving to another time is always free, and your money moves with you.`
+    : `The free-cancel time passed at ${deadline}, so the deposit is kept if you cancel now, as agreed when you booked. Moving to another time is still free, and your money moves with you.`;
+}
+
+function payLaterAnswer(booking) {
+  const due = booking.payments.find((p) => p.status === 'pending')?.amount ?? booking.deposit;
+  const small = due < 30 ? ` (Pay Later starts at $30, so for this ${B.usd(due)} a card or Venmo is easiest.)` : '';
+  return `Yes! On the payment page, tap Pay Later. If you're eligible, PayPal can split it into smaller payments, like 4 interest-free payments, subject to approval.${small} Venmo and cards work too, and no PayPal account is needed.`;
+}
+
 export async function scriptedCustomerReply(lead) {
   const business = B.businessOf(lead);
   const last = lead.messages.filter((m) => m.role === 'customer').at(-1)?.text || '';
@@ -31,6 +50,7 @@ export async function scriptedCustomerReply(lead) {
   const flow = lead.flow || {};
   const booking = B.activeBookingForLead(lead.id);
   const save = (patch) => store.updateLead(lead.id, { flow: { ...flow, ...patch } });
+  const isQuestion = /\?\s*$/.test(last.trim()) || /^(what|can|could|how|is|are|do|does|will|would)\b/.test(t);
 
   if (booking) {
     if (/\b(yes|approve|ok)\b/.test(t) && booking.changes.some((c) => c.status === 'proposed')) {
@@ -45,6 +65,12 @@ export async function scriptedCustomerReply(lead) {
       const r = await B.refund(booking.id, { reason: 'Business canceled; customer chose a refund' });
       return `Done. ${B.usd(r.refunded)} is on its way back to you.`;
     }
+    if (isQuestion && /(refund|cancel|money back)/.test(t)) return policyAnswer(booking);
+    if (/(over time|pay later|installment|pay in 4|monthly|financ|afford|payment plan)/.test(t)) return payLaterAnswer(booking);
+    if (!/split/.test(t) && /(someone else|husband|wife|\bmom\b|\bdad\b|partner|boss|employer|landlord|pay for (it|this|me)|send (it|the bill|the link) to)/.test(t)) {
+      const r = await B.linkForSomeoneElse(booking.id, '');
+      return `Sure! Forward them this link. They can pay with their own PayPal, Venmo or card (no account needed), and you'll both see the confirmation: ${r.link}`;
+    }
     if (/cancel/.test(t)) {
       const r = await B.customerCancel(booking.id);
       if (r.outcome === 'kept_deposit') return `Canceled. Since it's past the free-cancel time (${r.deadline}), the ${B.usd(r.kept)} deposit is kept, as agreed at booking. Want to reschedule instead next time? Rescheduling is always free.`;
@@ -54,7 +80,7 @@ export async function scriptedCustomerReply(lead) {
       const r = await B.splitDue(booking.id, 2);
       return `Here are two links, ${B.usd(r.links[0].amount)} each: ${r.links.map((l) => l.link).join(' and ')}`;
     }
-    if (/(move|reschedule|another time|different time)/.test(t) || flow.rescheduling) {
+    if (/(move|reschedule|another time|different time|change (the|my) (time|day|date))/.test(t) || flow.rescheduling) {
       const pick = t.match(/\b([1-3])\b/);
       if (pick && flow.offered) {
         const slot = flow.offered[Number(pick[1]) - 1];
@@ -100,7 +126,7 @@ export async function scriptedCustomerReply(lead) {
   if (!name) return "What's your first name?";
   const r = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: service.id, size, slotStart: chosen.start, customerName: name });
   save({ slot: null, offered: null });
-  return `You're held for ${r.booking.slotLabel}, ${name}! ${r.terms}. Pay the deposit here (card, Venmo, Pay Later or PayPal): ${r.payLink}`;
+  return `Got it, ${name}! I'm holding ${r.booking.slotLabel} for you. ${r.terms} Tap to pay the deposit (card, Venmo, Pay Later or PayPal): ${r.payLink}`;
 }
 
 export async function scriptedOwnerReply(text) {

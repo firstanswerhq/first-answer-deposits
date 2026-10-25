@@ -49,14 +49,21 @@ function systemPrompt(business, lead, booking, channel) {
       ? `They were invited to book again: ${nudge.serviceId} / ${nudge.size} on ${formatSlot(nudge.slotStart, business.timezone)} (slotStart ${nudge.slotStart}), name ${nudge.name}. If they say yes, book exactly that.`
       : '';
   const days = business.openDays.map((d) => DAY_NAMES.at(d)).join(', ');
-  return `You are the front desk for ${business.name}, a ${business.trade} business in ${business.city}. You talk with customers by ${channel === 'voice' ? 'phone call (your words are spoken aloud, so never read out links or long numbers; say "I just texted you the link")' : 'text message'}.
+  const where =
+    channel === 'voice'
+      ? 'phone call (your words are spoken aloud, so never read out links or long numbers; say "I just texted you the link")'
+      : channel === 'payment page'
+        ? 'the chat box on the secure payment page, right next to the PayPal buttons (they are looking at the amount due; answer their question about the payment, the terms, Pay Later, splitting, someone else paying or changing the time, then point them back to the buttons)'
+        : 'text message';
+  return `You are the front desk for ${business.name}, a ${business.trade} business in ${business.city}. You talk with customers by ${where}.
 Right now it is ${nowLine(business)}. The business works ${days}.
 
 PRICE SHEET (the only prices you may quote):
 ${priceSheet(business)}
 ${business.sizeQuestion ? `To quote, you need the size: ${business.sizeQuestion}` : ''}
 
-PAYMENT: Every payment link opens a simple page with PayPal, Venmo, Pay Later and debit or credit card. No account or app is needed. For bigger jobs you may say customers can often pay over time with PayPal Pay Later, subject to PayPal's approval, and the options show on the payment page. Never promise approval or quote interest rates.
+PAYMENT: Every payment link opens a simple page with PayPal, Venmo, Pay Later and debit or credit card. No account or app is needed. If they ask about paying over time: PayPal Pay Later can split a purchase into smaller payments (for example 4 interest-free payments) if they're eligible, subject to approval, starting at $30; PayPal shows what they qualify for at checkout. Never promise approval or quote interest rates.
+REFUND QUESTIONS ("is this refundable?") are questions, not requests: explain the terms (free to cancel until the deadline below, then the deposit is kept; moving is always free) and do not cancel anything unless they clearly ask you to.
 
 WHAT YOU KNOW ABOUT THIS CUSTOMER:
 Name: ${lead.name || 'not given yet'}. ${bookingContext(booking)}
@@ -236,15 +243,23 @@ export async function replyToCustomer(leadId, { channel = 'text' } = {}) {
   if (!m) return scriptedCustomerReply(lead);
   const booking = B.activeBookingForLead(leadId) || B.latestBookingForLead(leadId);
   const state = { payLink: null };
-  const result = await generateText({
-    model: m.model,
-    system: systemPrompt(business, lead, booking, channel),
-    messages: toModelMessages(lead.messages),
-    tools: customerTools(lead, business, state),
-    stopWhen: stepCountIs(6),
-    temperature: 0.3,
-    maxOutputTokens: 500,
-  });
+  let result;
+  try {
+    result = await generateText({
+      model: m.model,
+      system: systemPrompt(business, lead, booking, channel),
+      messages: toModelMessages(lead.messages),
+      tools: customerTools(lead, business, state),
+      stopWhen: stepCountIs(6),
+      temperature: 0.3,
+      maxOutputTokens: 500,
+    });
+  } catch (err) {
+    // A rate limit or an outage at the AI provider should never leave a customer on read.
+    console.error(`Customer AI failed (${m.name}): ${err.message}. Using the scripted reply.`);
+    if (state.payLink) return `You're all set. Pay the deposit here: ${state.payLink}`;
+    return scriptedCustomerReply(store.getLead(leadId));
+  }
   let text = (result.text || '').trim();
   if (state.payLink && channel !== 'voice' && !text.includes(state.payLink)) text += ` Pay the deposit here: ${state.payLink}`;
   if (state.payLink && channel === 'voice') {

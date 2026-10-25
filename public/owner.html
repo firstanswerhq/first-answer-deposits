@@ -13,7 +13,7 @@
     .owner .phone { height: 720px; }
     .phone-chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; background: #fafbfd; border-top: 1px solid var(--line); }
     .phone-chips .chip { white-space: nowrap; font-size: 12px; padding: 6px 10px; }
-    select.biz { border-radius: 999px; padding: 6px 12px; border: 0; font-weight: 600; }
+    select.biz { border-radius: 999px; padding: 6px 12px; border: 0; font-weight: 600; color: var(--ink); background: #fff; max-width: 260px; }
     .section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   </style>
 </head>
@@ -47,7 +47,7 @@
             <button class="chip" data-q="Text past customers who are due to book again">Rebook past customers</button>
           </div>
           <form class="composer" id="composer">
-            <input id="msg" placeholder='Try "done at Sarah&apos;s" or "refund Mike"' autocomplete="off" maxlength="500" />
+            <input id="msg" placeholder="Text your office manager…" autocomplete="off" maxlength="500" />
             <button class="round" type="submit" title="Send">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
             </button>

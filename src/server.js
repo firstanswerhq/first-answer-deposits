@@ -8,7 +8,7 @@ import * as paypal from './paypal.js';
 import { presets } from './business.js';
 import { replyToCustomer } from './agent/customer.js';
 import { ownerCommand } from './agent/owner.js';
-import { modelLabel } from './agent/model.js';
+import { modelLabel, checkModel, aiStatus } from './agent/model.js';
 
 const app = express();
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -90,7 +90,7 @@ async function customerTurn(leadId, text, channel = 'text') {
 
 // ---------- health ----------
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, paypal: paypalReady ? config.paypal.env : 'demo mode (no keys)', ai: modelLabel(), aiReady });
+  res.json({ ok: true, paypal: paypalReady ? config.paypal.env : 'demo mode (no keys)', ai: modelLabel(), aiReady, aiCheck: aiStatus });
 });
 
 // ---------- customer text thread ----------
@@ -257,6 +257,7 @@ setInterval(() => B.sendRebookNudges().catch((e) => console.error('rebook', e.me
 app.listen(config.port, () => {
   console.log(`First Answer Deposits running on ${config.publicUrl}`);
   console.log(`PayPal: ${paypalReady ? config.paypal.env : 'demo mode (no keys)'} | AI: ${modelLabel()}`);
+  checkModel().then((s) => s.checked && console.log(`AI check: ${s.ok ? 'working' : `FAILED (${s.error})`}`));
 });
 
 export default app;

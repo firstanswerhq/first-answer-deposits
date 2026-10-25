@@ -11,7 +11,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><div class="brand-mark" id="biz-mark">·</div><span id="biz-name">Loading…</span></div>
-    <div class="right"><span class="badge">&#128274; Secure checkout with PayPal</span></div>
+    <div class="right"><span class="badge">&#128274;<span class="long"> Secure checkout with</span> PayPal</span></div>
   </header>
 
   <main class="wrap grid-2">
@@ -51,7 +51,7 @@
       <p class="small" id="pay-error" style="color: var(--bad)"></p>
     </section>
 
-    <aside class="card assist">
+    <aside class="card assist" id="assist">
       <div class="assist-head">
         <div class="dot">AI</div>
         <div>
@@ -78,6 +78,7 @@
       </form>
     </aside>
   </main>
+  <button class="ask-fab" id="ask-fab" type="button"><span class="dot">AI</span>Questions? Ask me</button>
   <script type="module" src="/js/pay.js"></script>
 </body>
 </html>

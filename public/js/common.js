@@ -54,6 +54,37 @@ export function $(sel, root = document) {
   return root.querySelector(sel);
 }
 
+// In-page dialog (no browser pop-ups). Resolves to true / the typed value, or null if canceled.
+export function ask({ title, text = '', input = null, ok = 'OK', cancel = 'Cancel', danger = false }) {
+  return new Promise((resolve) => {
+    const d = document.createElement('dialog');
+    d.className = 'modal';
+    const field = input
+      ? `<label class="field">${input.prefix ? `<span class="muted">${escapeHtml(input.prefix)}</span>` : ''}<input name="v" autocomplete="off" inputmode="${input.inputmode || 'text'}" placeholder="${escapeHtml(input.placeholder || '')}" value="${escapeHtml(input.value ?? '')}" ${input.optional ? '' : 'required'}></label>`
+      : '';
+    d.innerHTML = `<form method="dialog"><h3>${escapeHtml(title)}</h3>${text ? `<p class="muted">${escapeHtml(text)}</p>` : ''}${field}
+      <div class="modal-actions"><button value="cancel" class="btn secondary" formnovalidate>${escapeHtml(cancel)}</button><button value="ok" class="btn ${danger ? 'danger' : 'primary'}">${escapeHtml(ok)}</button></div></form>`;
+    document.body.appendChild(d);
+    d.addEventListener('close', () => {
+      const v = d.returnValue === 'ok' ? (input ? d.querySelector('input').value.trim() : true) : null;
+      d.remove();
+      resolve(v);
+    });
+    d.showModal();
+    (d.querySelector('input') || d.querySelector('button[value=ok]')).focus();
+  });
+}
+
+// Small message that fades away (used instead of alert()).
+export function toast(text, kind = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.textContent = text;
+  document.body.appendChild(el);
+  setTimeout(() => el.classList.add('out'), 3200);
+  setTimeout(() => el.remove(), 3700);
+}
+
 // Browser speech for call mode (Chrome, Edge, Safari). Returns null when the browser can't do it.
 export function speechKit() {
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;

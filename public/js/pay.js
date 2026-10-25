@@ -25,7 +25,9 @@ function render() {
   rows.push(['Total for the job', money(t.total)]);
   if (t.paid > 0) rows.push(['Already paid', money(t.paid)]);
   if (payment.kind === 'deposit') {
-    rows.push(['Balance after the job', money(Math.max(0, t.total - t.paid - payment.amount))]);
+    // Once this deposit is paid it is already inside t.paid, so only subtract it while it is still due.
+    const stillDue = payment.status === 'pending' ? payment.amount : 0;
+    rows.push(['Balance after the job', money(Math.max(0, t.total - t.paid - stillDue))]);
   }
   if (payment.kind === 'balance' && state.tip > 0) rows.push(['Tip for the crew', money(state.tip)]);
   rows.push([payment.status === 'completed' ? 'Paid' : 'Due now', money(due), 'due']);
@@ -92,6 +94,9 @@ function loadScript(src) {
 async function setupPayment() {
   const { paypal: pp, payment } = state.data;
   if (!pp) {
+    // Demo mode (no PayPal keys): one button stands in for PayPal's.
+    $('#paypal-buttons').classList.add('hidden');
+    $('#paylater-message').classList.add('hidden');
     $('#demo-pay').classList.remove('hidden');
     return;
   }
@@ -208,6 +213,14 @@ function wire() {
     const b = e.target.closest('[data-q]');
     if (b) ask(b.dataset.q);
   });
+  $('#ask-fab').addEventListener('click', () => {
+    $('#assist').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => $('#q').focus({ preventScroll: true }), 400);
+  });
+  // Hide the pill once the assistant is on screen.
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(([e]) => $('#ask-fab').classList.toggle('hidden', e.isIntersecting), { threshold: 0.25 }).observe($('#assist'));
+  }
   $('#tips').addEventListener('click', (e) => {
     const b = e.target.closest('[data-tip]');
     if (!b) return;

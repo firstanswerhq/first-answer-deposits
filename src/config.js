@@ -14,10 +14,13 @@ export const config = {
     webhookId: process.env.PAYPAL_WEBHOOK_ID || '',
   },
   ai: {
-    googleKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || '',
+    provider: (process.env.AI_PROVIDER || '').toLowerCase(),
     anthropicKey: process.env.ANTHROPIC_API_KEY || '',
-    googleModel: process.env.GOOGLE_MODEL || 'gemini-2.5-flash',
-    anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
+    anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5',
+    groqKey: process.env.GROQ_API_KEY || '',
+    groqModel: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
+    googleKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || '',
+    googleModel: process.env.GOOGLE_MODEL || 'gemini-3.5-flash-lite',
   },
   ownerPasscode: process.env.OWNER_PASSCODE || '',
   dataFile: process.env.DATA_FILE || fileURLToPath(new URL('../data/db.json', import.meta.url)),
@@ -27,4 +30,4 @@ export const paypalApiBase =
   config.paypal.env === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
 
 export const paypalReady = Boolean(config.paypal.clientId && config.paypal.clientSecret);
-export const aiReady = Boolean(config.ai.googleKey || config.ai.anthropicKey);
+export const aiReady = Boolean(config.ai.googleKey || config.ai.anthropicKey || config.ai.groqKey);
