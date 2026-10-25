@@ -30,6 +30,11 @@ export function getModel() {
   return cached;
 }
 
+// Tests swap in a mock model to exercise the AI path without a key.
+export function _setModelForTests(m) {
+  cached = m;
+}
+
 export function modelLabel() {
   return getModel()?.name || 'Scripted demo mode (no AI key set)';
 }
