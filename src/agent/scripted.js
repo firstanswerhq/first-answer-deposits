@@ -4,6 +4,33 @@ import * as store from '../store.js';
 import * as B from '../bookings.js';
 
 const lower = (s) => String(s || '').toLowerCase();
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+// "Friday morning", "tomorrow", "this weekend": pick the open times that match what they asked for.
+export function slotsMatching(business, text, limit = 3) {
+  const t = lower(text);
+  const all = B.availableSlots(business, { limit: 60, days: 14 });
+  const local = (iso) => new Date(new Date(iso).toLocaleString('en-US', { timeZone: business.timezone }));
+  let want = all;
+  const day = DAYS.findIndex((d) => new RegExp(`\\b${d}`).test(t));
+  if (/\btomorrow\b/.test(t)) {
+    const tomorrow = local(new Date().toISOString());
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    want = all.filter((s) => local(s.start).toDateString() === tomorrow.toDateString());
+  } else if (/\btoday\b/.test(t)) {
+    const today = local(new Date().toISOString());
+    want = all.filter((s) => local(s.start).toDateString() === today.toDateString());
+  } else if (day >= 0) {
+    want = all.filter((s) => local(s.start).getDay() === day);
+  } else if (/weekend/.test(t)) {
+    want = all.filter((s) => [0, 6].includes(local(s.start).getDay()));
+  }
+  if (/morning/.test(t)) want = want.filter((s) => local(s.start).getHours() < 12);
+  else if (/afternoon|after lunch/.test(t)) want = want.filter((s) => local(s.start).getHours() >= 12 && local(s.start).getHours() < 17);
+  else if (/evening|after work/.test(t)) want = want.filter((s) => local(s.start).getHours() >= 16);
+  const picked = (want.length ? want : all).slice(0, limit);
+  return { slots: picked, matched: want.length > 0, asked: want !== all };
+}
 
 function detectService(business, text) {
   const t = lower(text);
@@ -117,10 +144,12 @@ export async function scriptedCustomerReply(lead) {
       if (!lead.name) return `Perfect, ${slot.label} it is. What's your first name?`;
     } else {
       const q = B.quote(business, service.id, size);
-      const slots = B.availableSlots(business, { limit: 3 });
+      const recent = lead.messages.filter((m) => m.role === 'customer').slice(-4).map((m) => m.text).join(' ');
+      const { slots, matched, asked } = slotsMatching(business, recent, 3);
       save({ serviceId: service.id, size, offered: slots });
       const what = size === 'standard' ? service.name : `${service.name} for ${size}`;
-      return `${what} is ${q.price > 0 ? B.usd(q.price) : 'free'}. Open times: ${slots.map((s, i) => `${i + 1}) ${s.label}`).join('  ')}. Reply 1, 2 or 3.`;
+      const lead_in = asked && !matched ? "Nothing's open then, but here's what I have: " : 'Open times: ';
+      return `${what} is ${q.price > 0 ? B.usd(q.price) : 'free'}. ${lead_in}${slots.map((s, i) => `${i + 1}) ${s.label}`).join('  ')}. Reply 1, 2 or 3.`;
     }
   }
   const chosen = (store.getLead(lead.id).flow || {}).slot;
