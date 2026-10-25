@@ -1,4 +1,5 @@
 import { api, money, linkify, listen, $, speechKit, escapeHtml } from './common.js';
+import { registerWebMcpTools } from './webmcp.js';
 
 const paymentId = location.pathname.split('/').pop();
 const state = { data: null, tip: 0, sdkLoaded: false, rendered: false, speaking: false };
@@ -262,6 +263,30 @@ async function load() {
 wire();
 await load();
 if (state.data) {
+  // Browser assistants that speak WebMCP get the same help the chat box gives: read the bill, ask, change things.
+  registerWebMcpTools([
+    {
+      name: 'get_payment_details',
+      description: 'What this payment page is for: the business, service, appointment, total, what is paid, what is due now, the cancellation terms and how to pay.',
+      execute: () => {
+        const { booking, payment } = state.data;
+        return { business: booking.business.name, service: booking.title || booking.service, appointment: booking.appointment, status: booking.statusWords, totals: booking.totals, dueNow: payment.status === 'pending' ? payment.amount : 0, paymentStatus: payment.status, freeCancelUntil: booking.freeCancelUntil, paymentMethods: ['PayPal', 'Venmo', 'Pay Later', 'debit or credit card'], note: 'Only the person can pay: use the PayPal buttons on the page.' };
+      },
+    },
+    {
+      name: 'ask_the_business',
+      description: "Ask the business's AI a question about this booking or payment, or request a change (move the time, split the bill, send it to someone else, cancel). Returns the reply.",
+      inputSchema: { type: 'object', properties: { question: { type: 'string' } }, required: ['question'] },
+      execute: async ({ question }) => {
+        const r = await api(`/api/pay/${paymentId}/chat`, { method: 'POST', body: { text: String(question).slice(0, 500), channel: 'text' } });
+        if (r.reply) say(r.reply);
+        state.data.booking = r.booking;
+        state.data.payment = { ...state.data.payment, ...r.payment };
+        render();
+        return r.reply;
+      },
+    },
+  ]);
   const { booking, payment } = state.data;
   const name = firstName(booking.customerName);
   if (payment.status === 'pending') {

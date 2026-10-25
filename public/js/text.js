@@ -1,4 +1,5 @@
 import { api, linkify, listen, $, speechKit, clock } from './common.js';
+import { registerWebMcpTools } from './webmcp.js';
 
 const BIZ = [
   { id: 'cleaning', label: 'House cleaner' },
@@ -217,3 +218,18 @@ $('#restart').addEventListener('click', () => {
 
 renderPick();
 start();
+
+// Browser assistants that speak WebMCP can text the business for the customer and read the thread.
+registerWebMcpTools([
+  {
+    name: 'text_the_business',
+    description: "Send a text message to this business's AI front desk on the customer's behalf (ask for a quote, open times, book, move or cancel). Returns the reply. Payment links must be opened and approved by the person.",
+    inputSchema: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] },
+    execute: async ({ message }) => (await send(String(message).slice(0, 500))) || 'Sent.',
+  },
+  {
+    name: 'read_conversation',
+    description: 'The messages so far between the customer and the business, newest last.',
+    execute: async () => (await api(`/api/text/${leadId}`)).messages.map((m) => `${m.role === 'customer' ? 'Customer' : 'Business'}: ${m.text}`).join('\n'),
+  },
+]);
