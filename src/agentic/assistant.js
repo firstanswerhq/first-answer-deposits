@@ -111,12 +111,16 @@ export function parseBudget(text) {
 export function parseName(text) {
   const t = String(text || '');
   const pats = [
-    /\b(?:i'?m|i am|my name is|my name'?s|this is|name is|call me|it'?s|its|under(?: the name)?|for)\s+([A-Z][a-zA-Z'-]{1,30})\b/,
-    /\b(?:my name is|my name'?s|call me|name is|i am|i'?m)\s+([a-z][a-z'-]{1,30})\b(?=\s*[.!,]?\s*$)/i,
+    // "I'm Sarah Kim", "my name is Sarah", "under Sarah Kim": one or two capitalized words.
+    /\b(?:[Ii]'?m|[Ii] am|[Mm]y name is|[Mm]y name'?s|[Tt]his is|name is|[Cc]all me|it'?s|its|under(?: the name)?|for)\s+([A-Z][a-zA-Z'-]{1,30}(?:\s+[A-Z][a-zA-Z'-]{1,30})?)\b/,
+    /\b(?:my name is|my name'?s|call me|name is|i am|i'?m)\s+([a-z][a-z'-]{1,30}(?:\s+[a-z][a-z'-]{1,30})?)\b(?=\s*[.!,]?\s*$)/i,
   ];
   for (const p of pats) {
     const m = t.match(p);
-    if (m && !NOT_NAMES.has(m[1].toLowerCase())) return m[1][0].toUpperCase() + m[1].slice(1);
+    if (!m) continue;
+    const words = m[1].split(/\s+/).filter((w) => !NOT_NAMES.has(w.toLowerCase()));
+    if (!words.length || NOT_NAMES.has(words[0].toLowerCase())) continue;
+    return words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
   }
   return null;
 }

@@ -149,6 +149,15 @@ test('payment page questions get real answers, not actions', async () => {
   assert.match(r, /\/p\/pay_/);
   r = await say(lead.id, 'Can we change the time?');
   assert.match(r, /Reply 1, 2 or 3/);
+  // Wording with a day in it offers that day and the pick reschedules.
+  store.updateLead(lead.id, { flow: {} });
+  r = await say(lead.id, 'Can we do Saturday instead?');
+  assert.match(r, /Reply 1, 2 or 3/);
+  assert.match(r, /Sat/);
+  r = await say(lead.id, '1');
+  const moved = store.getBooking(booking.id);
+  assert.notEqual(moved.slotStart, s.start);
+  assert.match(moved.slotLabel, /Sat/);
 });
 
 test('business cancel offers new times; customer refund on request', async () => {

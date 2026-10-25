@@ -107,7 +107,10 @@ export async function scriptedCustomerReply(lead) {
       const r = await B.splitDue(booking.id, 2);
       return `Here are two links, ${B.usd(r.links[0].amount)} each: ${r.links.map((l) => l.link).join(' and ')}`;
     }
-    if (/(move|reschedule|another time|different time|change (the|my) (time|day|date))/.test(t) || flow.rescheduling) {
+    const dayWord = /\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\b(tomorrow|today|weekend|morning|afternoon|evening)\b/;
+    const wantsMove = /(move|reschedule|another time|different time|change (the|my|it)|push (it )?(back|to)|switch|swap)/.test(t)
+      || (dayWord.test(t) && /(instead|can we|could we|can you|could you|make it|do it|let'?s do|how about|what about)/.test(t));
+    if (wantsMove || flow.rescheduling) {
       const pick = t.match(/\b([1-3])\b/);
       if (pick && flow.offered) {
         const slot = flow.offered[Number(pick[1]) - 1];
@@ -117,9 +120,11 @@ export async function scriptedCustomerReply(lead) {
           return null; // reschedule() already texted the confirmation
         }
       }
-      const slots = B.availableSlots(business, { limit: 3 }).filter((s) => s.start !== booking.slotStart);
+      const found = slotsMatching(business, t, 4);
+      const slots = found.slots.filter((s) => s.start !== booking.slotStart).slice(0, 3);
       save({ rescheduling: true, offered: slots });
-      return `Sure! Reply 1, 2 or 3: ${slots.map((s, i) => `${i + 1}) ${s.label}`).join('  ')}`;
+      const lead_in = found.asked && !found.matched ? "Nothing's open then, but here's what I have. " : 'Sure! ';
+      return `${lead_in}Reply 1, 2 or 3: ${slots.map((s, i) => `${i + 1}) ${s.label}`).join('  ')}`;
     }
     const tt = B.totals(booking);
     return `You're ${B.STATUS_WORDS[booking.status].toLowerCase()} for ${booking.slotLabel}. Total ${B.usd(tt.total)}, paid ${B.usd(tt.paid)}, owed ${B.usd(tt.due)}. Details: ${B.bookingPageUrl(booking)}`;
