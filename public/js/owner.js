@@ -226,6 +226,18 @@ $('#biz').addEventListener('change', async (e) => {
   refresh();
   connections();
 });
+$('#seed').addEventListener('click', async () => {
+  $('#seed').disabled = true;
+  try {
+    await api('/api/owner/seed', { method: 'POST', headers: hdr });
+    toast('Sample day loaded.');
+  } catch (err) {
+    toast(err.message, 'bad');
+  } finally {
+    $('#seed').disabled = false;
+    refresh();
+  }
+});
 $('#reset').addEventListener('click', async () => {
   if (!(await ask({ title: 'Start the demo over?', text: 'This clears every demo booking, message and payment.', ok: 'Clear it', danger: true }))) return;
   await api('/api/owner/reset', { method: 'POST', headers: hdr });

@@ -11,6 +11,7 @@ import { ownerCommand } from './agent/owner.js';
 import { modelLabel, checkModel, aiStatus } from './agent/model.js';
 import * as setup from './setup.js';
 import * as connect from './connect.js';
+import { seedSampleDay } from './seed.js';
 
 const app = express();
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -280,6 +281,7 @@ app.post('/api/owner/preset', ownerOnly, (req, res) => {
   store.setPreset(req.body.presetId);
   res.json({ ok: true });
 });
+app.post('/api/owner/seed', ownerOnly, wrap(async (req, res) => res.json({ ok: true, ...(await seedSampleDay(B.currentBusiness())) })));
 app.post('/api/owner/reset', ownerOnly, (req, res) => {
   store.resetAll();
   res.json({ ok: true });
