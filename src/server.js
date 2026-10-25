@@ -12,6 +12,7 @@ import { modelLabel, checkModel, aiStatus } from './agent/model.js';
 import * as setup from './setup.js';
 import * as connect from './connect.js';
 import { seedSampleDay } from './seed.js';
+import { mountAgentic } from './agentic/index.js';
 
 const app = express();
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -34,6 +35,7 @@ app.post('/api/webhooks/paypal', express.raw({ type: '*/*', limit: '1mb' }), asy
 });
 
 app.use(express.json({ limit: '100kb' }));
+mountAgentic(app);
 app.use(express.static(pub, { extensions: ['html'] }));
 
 // ---------- small helpers ----------
