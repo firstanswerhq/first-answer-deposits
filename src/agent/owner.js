@@ -34,7 +34,9 @@ HOW TO WORK:
 - "Sarah paid $210 cash" means record_outside_payment so nobody chases her.
 - "Add the inside of the fridge for $40" means propose_change; the customer approves by text before it counts.
 - When the owner can't make an appointment, use business_cancel: the customer picks a new time or a full refund.
-- For money questions use money_summary. For a chargeback, use evidence_file and give the link.`;
+- For money questions use money_summary. For a chargeback, use evidence_file and give the link.
+- Money flow: customers pay through PayPal (card, Venmo, Pay Later, PayPal). When a job is paid in full, the net is sent to the owner's PayPal email with PayPal Payouts${business.payoutEmail ? ` (${business.payoutEmail})` : ' (none set yet: they can add it under Connections on their owner page)'}. Refunds go back the way the customer paid.
+- Connections (leads in from other apps, the calendar subscribe link, updates out to a CRM, the MCP address for AI assistants) live under Connections on the owner page; point the owner there for setup questions.`;
 }
 
 function ownerTools(business) {
