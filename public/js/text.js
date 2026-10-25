@@ -73,6 +73,13 @@ async function start(fresh = false) {
   seen = 0;
   $('#thread').innerHTML = '';
   const key = `fad-lead-${presetId}`;
+  // ?lead=<id> opens a thread that started somewhere else (a lead sent in from another app).
+  const wanted = params.get('lead');
+  if (wanted && !fresh) {
+    store.set(key, wanted);
+    params.delete('lead');
+    history.replaceState(null, '', `?biz=${presetId}`);
+  }
   leadId = fresh ? null : store.get(key);
   let data = null;
   if (leadId) {

@@ -10,6 +10,7 @@ import { replyToCustomer } from './agent/customer.js';
 import { ownerCommand } from './agent/owner.js';
 import { modelLabel, checkModel, aiStatus } from './agent/model.js';
 import * as setup from './setup.js';
+import * as connect from './connect.js';
 
 const app = express();
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -206,6 +207,42 @@ app.post('/api/setup/create', rateLimit(10, 10 * 60 * 1000), wrap(async (req, re
   });
 }));
 
+// ---------- connections: leads in from any app, calendar out, busy times in, updates out ----------
+app.post('/api/leads/in/:bizId', express.urlencoded({ extended: true }), rateLimit(60, 10 * 60 * 1000), wrap(async (req, res) => {
+  const business = B.businessById(req.params.bizId);
+  if (!business) return res.status(404).json({ error: 'Unknown business' });
+  const r = await connect.leadIn(business, req.body || {}, { source: String(req.query.source || '') });
+  res.json({ ok: true, ...r });
+}));
+app.get('/calendar/:bizId.ics', (req, res) => {
+  const business = B.businessById(req.params.bizId);
+  if (!business) return res.status(404).send('Unknown business');
+  res.set({ 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `inline; filename="${business.id}.ics"`, 'Cache-Control': 'no-cache' });
+  res.send(connect.calendarFor(business));
+});
+app.get('/api/owner/connections', ownerOnly, (req, res) => {
+  const business = B.currentBusiness();
+  res.json({
+    business: { id: business.id, name: business.name, custom: Boolean(business.custom) },
+    leadInUrl: connect.leadInUrl(business),
+    calendarUrl: connect.calendarUrl(business),
+    busyCalendarUrl: business.busyCalendarUrl || '',
+    webhookUrl: business.webhookUrl || '',
+    webhookSecret: business.webhookSecret || '',
+    payoutEmail: business.payoutEmail || '',
+    mcpUrl: `${config.publicUrl}/mcp/${business.id}`,
+  });
+});
+app.post('/api/owner/connections', ownerOnly, wrap(async (req, res) => {
+  const business = B.currentBusiness();
+  if (!business.custom) return res.status(400).json({ error: 'The demo businesses are read-only. Set up your own at /setup to connect apps.' });
+  const url = (v) => (v && /^https?:\/\//.test(String(v)) ? String(v).trim().slice(0, 500) : '');
+  const patch = { busyCalendarUrl: url(req.body.busyCalendarUrl), webhookUrl: url(req.body.webhookUrl), payoutEmail: String(req.body.payoutEmail || '').trim().slice(0, 120) };
+  if (patch.webhookUrl && !business.webhookSecret) patch.webhookSecret = store.newId('whsec');
+  store.saveBusiness({ ...business, ...patch });
+  res.json({ ok: true });
+}));
+
 // ---------- owner ----------
 app.get('/api/owner/state', ownerOnly, (req, res) => {
   const business = B.currentBusiness();
@@ -276,6 +313,8 @@ app.get('/api/events', (req, res) => {
     store.events.off('change', send);
   });
 });
+
+connect.startPushing();
 
 // ---------- background jobs ----------
 setInterval(() => B.releaseStaleHolds().catch((e) => console.error('releaseStaleHolds', e.message)), 60 * 1000).unref();

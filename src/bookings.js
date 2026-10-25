@@ -6,6 +6,7 @@ import * as store from './store.js';
 import * as paypal from './paypal.js';
 import { config, paypalReady } from './config.js';
 import { openSlots, isSlotOpen, formatSlot } from './slots.js';
+import { cachedBusy } from './busy.js';
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const sum = (arr) => round2(arr.reduce((a, b) => a + Number(b || 0), 0));
@@ -37,7 +38,10 @@ export function businessOf(x) {
   return (x && businessById(x.presetId)) || currentBusiness();
 }
 export function availableSlots(business, opts = {}) {
-  return openSlots(business, store.listBookings(), opts);
+  return openSlots(business, store.listBookings(), { busy: cachedBusy(business), ...opts });
+}
+function slotOpen(business, bookings, iso) {
+  return isSlotOpen(business, bookings, iso, { busy: cachedBusy(business) });
 }
 export function quote(business, serviceId, size) {
   const q = priceFor(business, serviceId, size);
@@ -162,7 +166,7 @@ export async function bookAndRequestDeposit({ leadId, serviceId, size, slotStart
   const business = businessOf(lead);
   const q = quote(business, serviceId, size);
   if (!q) throw new Error(`Unknown service or size: ${serviceId} / ${size}.`);
-  if (!isSlotOpen(business, store.listBookings(), slotStart)) throw new Error('That time is no longer open. Offer other times.');
+  if (!slotOpen(business, store.listBookings(), slotStart)) throw new Error('That time is no longer open. Offer other times.');
   if (activeBookingForLead(leadId)) throw new Error('This customer already has an active booking. Offer to reschedule it instead.');
 
   store.updateLead(lead.id, { name: customerName || lead.name, email: customerEmail || lead.email, status: 'booked' });
@@ -424,7 +428,7 @@ export async function reschedule(bookingId, newSlotStart, { notify = true } = {}
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
   const business = businessOf(b);
-  if (!isSlotOpen(business, store.listBookings().filter((x) => x.id !== b.id), newSlotStart)) throw new Error('That time is not open. Offer other times.');
+  if (!slotOpen(business, store.listBookings().filter((x) => x.id !== b.id), newSlotStart)) throw new Error('That time is not open. Offer other times.');
   const old = { start: b.slotStart, label: b.slotLabel };
   const label = formatSlot(newSlotStart, business.timezone);
   const nextStatus = b.status === 'needs_rebook' ? (totals(b).depositPaid >= b.deposit ? 'confirmed' : 'held') : b.status;

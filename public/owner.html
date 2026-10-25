@@ -14,7 +14,13 @@
     .phone-chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; background: #fafbfd; border-top: 1px solid var(--line); }
     .phone-chips .chip { white-space: nowrap; font-size: 12px; padding: 6px 10px; }
     select.biz { border-radius: 999px; padding: 6px 12px; border: 0; font-weight: 600; color: var(--ink); background: #fff; max-width: 260px; }
-    .section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 12px; flex-wrap: wrap; }
+    .conn-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    @media (max-width: 760px) { .conn-grid { grid-template-columns: 1fr; } }
+    .conn-grid p { margin: 0 0 8px; }
+    code.url { display: block; font-size: 12px; background: var(--bg); border-radius: 8px; padding: 8px 10px; word-break: break-all; }
+    .conn-input { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; margin-top: 4px; font-size: 14px; }
+    .conn-input:focus { outline: none; border-color: var(--brand-1); }
   </style>
 </head>
 <body>
@@ -72,6 +78,39 @@
           <ul class="feed" id="needs"></ul>
           <h3 style="margin-top: 16px">Waitlist</h3>
           <ul class="feed" id="waitlist"></ul>
+        </div>
+      </div>
+      <div class="card" id="connections">
+        <div class="section-title"><h2>Connections</h2><span class="small muted">Keep the apps you already use. This plugs into them.</span></div>
+        <div class="conn-grid">
+          <div>
+            <h3>Leads in, from any app</h3>
+            <p class="small muted">Point your lead app, GoHighLevel, Zapier or a web form at this address. Every lead gets an answer in seconds and a PayPal deposit link.</p>
+            <code class="url" id="c-leadin"></code>
+            <div class="actions" style="margin-top: 8px"><button class="btn secondary small" id="c-copy-leadin">Copy</button><button class="btn secondary small" id="c-test-lead">Send a test lead</button></div>
+          </div>
+          <div>
+            <h3>Your calendar</h3>
+            <p class="small muted">Subscribe in Google, Apple or Outlook and every booking shows up by itself.</p>
+            <code class="url" id="c-cal"></code>
+            <div class="actions" style="margin-top: 8px"><button class="btn secondary small" id="c-copy-cal">Copy</button></div>
+            <label class="small muted" style="display:block; margin-top: 10px">Private iCal link of your own calendar (optional), so the AI never offers a time you're busy</label>
+            <input class="conn-input" id="c-busy" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
+          </div>
+          <div>
+            <h3>Updates out, to your CRM</h3>
+            <p class="small muted">Deposit paid, moved, refunded, paid in full: each one is posted to this address, signed.</p>
+            <input class="conn-input" id="c-webhook" placeholder="https://your-crm.example/webhook" />
+            <label class="small muted" style="display:block; margin-top: 10px">PayPal email for payouts when a job is paid</label>
+            <input class="conn-input" id="c-payout" placeholder="you@example.com" />
+            <div class="actions" style="margin-top: 10px"><button class="btn primary small" id="c-save">Save</button><span class="small muted" id="c-note"></span></div>
+          </div>
+          <div>
+            <h3>AI assistants</h3>
+            <p class="small muted">Any assistant that speaks MCP can check your times, quote and book you. The customer approves the deposit in PayPal.</p>
+            <code class="url" id="c-mcp"></code>
+            <div class="actions" style="margin-top: 8px"><button class="btn secondary small" id="c-copy-mcp">Copy</button><a class="btn secondary small" href="/agent" target="_blank">See it work</a></div>
+          </div>
         </div>
       </div>
     </div>

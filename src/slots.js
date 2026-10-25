@@ -54,7 +54,13 @@ export function formatSlot(iso, timeZone) {
 
 const HOLDING = new Set(['held', 'confirmed', 'completed', 'paid_in_full', 'needs_rebook']);
 
-export function openSlots(business, bookings = [], { days = 7, now = new Date(), leadHours = 2, limit = 12 } = {}) {
+export function openSlots(business, bookings = [], { days = 7, now = new Date(), leadHours = 2, limit = 12, busy = [] } = {}) {
+  const minutes = business.slotMinutes || 120;
+  const isBusy = (iso) => {
+    const s = Date.parse(iso);
+    const e = s + minutes * 60000;
+    return busy.some((b) => Date.parse(b.start) < e && Date.parse(b.end) > s);
+  };
   const taken = new Set(
     bookings.filter((b) => b.presetId === business.id && HOLDING.has(b.status)).map((b) => b.slotStart),
   );
@@ -68,7 +74,7 @@ export function openSlots(business, bookings = [], { days = 7, now = new Date(),
       const start = zonedToUtc(date, time, business.timezone);
       if (start.getTime() < earliest) continue;
       const iso = start.toISOString();
-      if (taken.has(iso)) continue;
+      if (taken.has(iso) || (busy.length && isBusy(iso))) continue;
       out.push({ start: iso, label: formatSlot(iso, business.timezone) });
       if (out.length >= limit) break;
     }

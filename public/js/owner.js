@@ -47,7 +47,13 @@ function bookings(list) {
 }
 
 function feed(items) {
-  $('#feed').innerHTML = items.map((a) => `<li><time>${clock(a.at)}</time>${escapeHtml(a.text)}</li>`).join('') || '<li class="muted">Nothing yet.</li>';
+  $('#feed').innerHTML =
+    items
+      .map((a) => {
+        const open = a.kind === 'lead_in' && a.leadId ? ` <a href="/text?biz=${encodeURIComponent(a.presetId || lastState?.business.id || '')}&lead=${encodeURIComponent(a.leadId)}" target="_blank">Open the thread</a>` : '';
+        return `<li><time>${clock(a.at)}</time>${escapeHtml(a.text)}${open}</li>`;
+      })
+      .join('') || '<li class="muted">Nothing yet.</li>';
 }
 
 function ownerThread(msgs) {
@@ -80,6 +86,50 @@ async function refresh() {
       .join('') || '<li class="muted">All handled by the AI.</li>';
   $('#waitlist').innerHTML = s.waitlist.map((w) => `<li>${escapeHtml(w.name)} <span class="muted">${escapeHtml(w.status)}${w.note ? ` · ${escapeHtml(w.note)}` : ''}</span></li>`).join('') || '<li class="muted">Nobody waiting.</li>';
 }
+
+async function connections() {
+  const c = await api('/api/owner/connections', { headers: hdr });
+  $('#c-leadin').textContent = c.leadInUrl;
+  $('#c-cal').textContent = c.calendarUrl;
+  $('#c-mcp').textContent = c.mcpUrl;
+  $('#c-busy').value = c.busyCalendarUrl;
+  $('#c-webhook').value = c.webhookUrl;
+  $('#c-payout').value = c.payoutEmail;
+  const ro = !c.business.custom;
+  for (const id of ['c-busy', 'c-webhook', 'c-payout']) $(`#${id}`).disabled = ro;
+  $('#c-save').disabled = ro;
+  $('#c-note').textContent = ro ? 'Demo businesses are read-only. Set up your own at /setup to connect apps.' : c.webhookSecret ? `Webhook signing secret: ${c.webhookSecret}` : '';
+}
+const copy = (id) => async () => {
+  try {
+    await navigator.clipboard.writeText($(id).textContent);
+    toast('Copied.');
+  } catch {
+    toast('Select the address and copy it.', 'bad');
+  }
+};
+$('#c-copy-leadin').addEventListener('click', copy('#c-leadin'));
+$('#c-copy-cal').addEventListener('click', copy('#c-cal'));
+$('#c-copy-mcp').addEventListener('click', copy('#c-mcp'));
+$('#c-test-lead').addEventListener('click', async () => {
+  $('#c-test-lead').disabled = true;
+  try {
+    const r = await fetch($('#c-leadin').textContent + '?source=test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Dana Whitfield', phone: '615-555-0142', message: 'Hi! Do you have anything this week?' }) }).then((x) => x.json());
+    toast(r.ok ? `Test lead answered in ${r.seconds}s. It's in the activity feed.` : r.error || 'Could not send', r.ok ? '' : 'bad');
+  } finally {
+    $('#c-test-lead').disabled = false;
+    refresh();
+  }
+});
+$('#c-save').addEventListener('click', async () => {
+  try {
+    await api('/api/owner/connections', { method: 'POST', headers: hdr, body: { busyCalendarUrl: $('#c-busy').value, webhookUrl: $('#c-webhook').value, payoutEmail: $('#c-payout').value } });
+    toast('Saved.');
+    connections();
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+});
 
 function scheduleRefresh() {
   clearTimeout(refreshTimer);
@@ -174,6 +224,7 @@ $('#bookings').addEventListener('click', async (e) => {
 $('#biz').addEventListener('change', async (e) => {
   await api('/api/owner/preset', { method: 'POST', body: { presetId: e.target.value }, headers: hdr });
   refresh();
+  connections();
 });
 $('#reset').addEventListener('click', async () => {
   if (!(await ask({ title: 'Start the demo over?', text: 'This clears every demo booking, message and payment.', ok: 'Clear it', danger: true }))) return;
@@ -183,11 +234,13 @@ $('#reset').addEventListener('click', async () => {
 });
 
 await refresh();
+connections();
 // /owner?biz=<id> opens a specific business (used by the setup page's "owner's phone" link).
 const wantBiz = new URLSearchParams(location.search).get('biz');
 if (wantBiz && lastState && lastState.business.id !== wantBiz && lastState.presets.some((p) => p.id === wantBiz)) {
   await api('/api/owner/preset', { method: 'POST', body: { presetId: wantBiz }, headers: hdr });
   seenOwner = 0;
   await refresh();
+  connections();
 }
 listen(`/api/events?owner=1${code ? `&code=${code}` : ''}`, scheduleRefresh);
