@@ -44,7 +44,7 @@
         $('#biz').textContent = b.business.name;
         $('#mark').textContent = b.business.name[0];
         $('#who').textContent = `Booking for ${b.customerName}`;
-        $('#title').textContent = `${b.service}, ${b.size}`;
+        $('#title').textContent = b.title || b.service;
         $('#when').textContent = b.appointment;
         $('#status').className = `status ${b.status}`;
         $('#status').textContent = b.statusWords;

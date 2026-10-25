@@ -9,6 +9,7 @@ import { presets } from './business.js';
 import { replyToCustomer } from './agent/customer.js';
 import { ownerCommand } from './agent/owner.js';
 import { modelLabel, checkModel, aiStatus } from './agent/model.js';
+import * as setup from './setup.js';
 
 const app = express();
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -65,7 +66,8 @@ function publicBooking(b) {
     business: { name: business.name, trade: business.trade, city: business.city },
     customerName: b.customerName,
     service: b.service,
-    size: b.size,
+    size: b.size === 'standard' ? '' : b.size,
+    title: b.size === 'standard' ? b.service : `${b.service}, ${b.size}`,
     appointment: b.slotLabel,
     slotStart: b.slotStart,
     durationMinutes: business.slotMinutes,
@@ -95,9 +97,9 @@ app.get('/api/health', (req, res) => {
 
 // ---------- customer text thread ----------
 app.post('/api/text/start', wrap(async (req, res) => {
-  const presetId = presets[req.body.presetId] ? req.body.presetId : store.getSettings().presetId;
+  const presetId = B.businessById(req.body.presetId) ? req.body.presetId : store.getSettings().presetId;
   const lead = store.createLead({ channel: req.body.channel || 'text', presetId, phone: req.body.phone || '' });
-  res.json({ leadId: lead.id, business: presets[presetId].name });
+  res.json({ leadId: lead.id, business: B.businessById(presetId).name });
 }));
 
 app.get('/api/text/:leadId', (req, res) => {
@@ -179,12 +181,37 @@ app.get('/api/booking/:bookingId', (req, res) => {
   res.json({ booking: publicBooking(b), payLink: open ? B.payPageUrl(open) : null });
 });
 
+// ---------- setup by text (any business, in a minute) ----------
+app.get('/api/setup/steps', (req, res) => res.json({ steps: setup.STEPS, ai: Boolean(modelLabel() && aiReady) }));
+app.post('/api/setup/answer', rateLimit(60, 10 * 60 * 1000), (req, res) => {
+  // Keep line breaks here: services come one per line.
+  const text = String(req.body.text || '').replace(/[ \t]+/g, ' ').trim().slice(0, 4000);
+  const r = setup.applyAnswer(String(req.body.stepId || ''), text, req.body.profile || {});
+  res.json(r);
+});
+app.post('/api/setup/text', rateLimit(20, 10 * 60 * 1000), wrap(async (req, res) => {
+  const profile = await setup.profileFromText(String(req.body.text || '').slice(0, 4000));
+  res.json({ profile });
+}));
+app.post('/api/setup/create', rateLimit(10, 10 * 60 * 1000), wrap(async (req, res) => {
+  const b = setup.createBusiness(req.body.profile || {});
+  res.json({
+    business: { id: b.id, name: b.name, trade: b.trade, city: b.city, services: b.services, deposit: b.deposit, payoutEmail: b.payoutEmail },
+    links: {
+      text: `${config.publicUrl}/text?biz=${b.id}`,
+      owner: `${config.publicUrl}/owner?biz=${b.id}`,
+      agent: `${config.publicUrl}/agent?biz=${b.id}`,
+      mcp: `${config.publicUrl}/mcp/${b.id}`,
+    },
+  });
+}));
+
 // ---------- owner ----------
 app.get('/api/owner/state', ownerOnly, (req, res) => {
   const business = B.currentBusiness();
   res.json({
     business: { id: business.id, name: business.name, trade: business.trade },
-    presets: Object.values(presets).map((p) => ({ id: p.id, name: p.name, trade: p.trade })),
+    presets: B.listAllBusinesses().map((p) => ({ id: p.id, name: p.name, trade: p.trade, custom: !presets[p.id] })),
     summary: B.summary(),
     bookings: store.listBookings().slice(0, 50).map(publicBooking),
     leads: store.listLeads().slice(0, 50).map((l) => ({ id: l.id, name: l.name, status: l.status, presetId: l.presetId, needsOwner: Boolean(l.needsOwner), lastMessage: l.messages.at(-1) || null, firstReplyMs: l.firstReplyMs })),
@@ -212,7 +239,7 @@ app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerAction((req) => B.recor
 app.post('/api/owner/rebook', ownerOnly, ownerAction(() => B.sendRebookNudges({ force: true })));
 
 app.post('/api/owner/preset', ownerOnly, (req, res) => {
-  if (!presets[req.body.presetId]) return res.status(400).json({ error: 'Unknown business' });
+  if (!B.businessById(req.body.presetId)) return res.status(400).json({ error: 'Unknown business' });
   store.setPreset(req.body.presetId);
   res.json({ ok: true });
 });

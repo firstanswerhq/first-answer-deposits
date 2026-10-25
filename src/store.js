@@ -11,6 +11,7 @@ events.setMaxListeners(100);
 
 const empty = () => ({
   settings: { presetId: defaultPresetId },
+  businesses: {},
   leads: [],
   bookings: [],
   waitlist: [],
@@ -60,6 +61,19 @@ export function getSettings() {
 export function setPreset(presetId) {
   db.settings.presetId = presetId;
   changed('settings', db.settings);
+}
+
+// ---------- businesses set up by owners (presets live in business.js) ----------
+export function getBusiness(id) {
+  return db.businesses[id] || null;
+}
+export function listBusinesses() {
+  return Object.values(db.businesses).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+export function saveBusiness(business) {
+  db.businesses[business.id] = { ...(db.businesses[business.id] || {}), ...business, updatedAt: new Date().toISOString() };
+  changed('business', { id: business.id });
+  return db.businesses[business.id];
 }
 
 // ---------- leads + conversation ----------
@@ -238,9 +252,11 @@ export function listActivity() {
 
 // ---------- demo reset ----------
 export function resetAll() {
-  const presetId = db.settings.presetId;
+  const { presetId } = db.settings;
+  const businesses = db.businesses;
   db = empty();
   db.settings.presetId = presetId;
+  db.businesses = businesses; // owners' setups survive a demo reset
   changed('reset', {});
 }
 

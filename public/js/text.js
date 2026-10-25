@@ -7,7 +7,8 @@ const BIZ = [
 ];
 
 const params = new URLSearchParams(location.search);
-let presetId = BIZ.some((b) => b.id === params.get('biz')) ? params.get('biz') : 'cleaning';
+// ?biz= can be a demo preset or a business an owner set up at /setup.
+let presetId = params.get('biz') || 'cleaning';
 let leadId = null;
 let seen = 0;
 let stopListening = null;
@@ -34,7 +35,8 @@ const store = {
 };
 
 function renderPick() {
-  $('#pick').innerHTML = BIZ.map((b) => `<button data-id="${b.id}" class="${b.id === presetId ? 'on' : ''}">${b.label}</button>`).join('');
+  const custom = BIZ.some((b) => b.id === presetId) ? '' : `<button data-id="${presetId}" class="on">${$('#biz').textContent || 'Your business'}</button>`;
+  $('#pick').innerHTML = custom + BIZ.map((b) => `<button data-id="${b.id}" class="${b.id === presetId ? 'on' : ''}">${b.label}</button>`).join('');
 }
 
 function addBubble(m) {
@@ -88,6 +90,7 @@ async function start(fresh = false) {
   }
   $('#biz').textContent = data.business;
   $('#avatar').textContent = data.business[0];
+  renderPick();
   $('#call-who').textContent = data.business;
   renderMessages(data.messages);
   stopListening = listen(`/api/events?lead=${leadId}`, async (evt) => {

@@ -103,10 +103,11 @@ export async function scriptedCustomerReply(lead) {
   if (!service) {
     return `Hi! Thanks for reaching out to ${business.name}. Which service do you need: ${business.services.map((s) => s.name.toLowerCase()).join(', ')}?`;
   }
-  const size = flow.size || detectSize(service, last);
+  const oneSize = Object.keys(service.sizes).length === 1 ? Object.keys(service.sizes)[0] : null;
+  const size = flow.size || oneSize || detectSize(service, last);
   if (!flow.serviceId || !size) {
     save({ serviceId: service.id, size: size || null });
-    if (!size) return `Great, a ${service.name.toLowerCase()}. ${business.sizeQuestion}`;
+    if (!size) return `Great, ${service.name.toLowerCase()}. ${business.sizeQuestion || 'Which option do you need?'}`;
   }
   if (!flow.slot) {
     const pick = t.match(/\b([1-3])\b/);
@@ -118,7 +119,8 @@ export async function scriptedCustomerReply(lead) {
       const q = B.quote(business, service.id, size);
       const slots = B.availableSlots(business, { limit: 3 });
       save({ serviceId: service.id, size, offered: slots });
-      return `A ${service.name.toLowerCase()} for ${size} is ${B.usd(q.price)}. Open times: ${slots.map((s, i) => `${i + 1}) ${s.label}`).join('  ')}. Reply 1, 2 or 3.`;
+      const what = size === 'standard' ? service.name : `${service.name} for ${size}`;
+      return `${what} is ${q.price > 0 ? B.usd(q.price) : 'free'}. Open times: ${slots.map((s, i) => `${i + 1}) ${s.label}`).join('  ')}. Reply 1, 2 or 3.`;
     }
   }
   const chosen = (store.getLead(lead.id).flow || {}).slot;

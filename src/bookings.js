@@ -23,11 +23,18 @@ export const STATUS_WORDS = {
 };
 
 // ---------------- lookups ----------------
+// A business is either a built-in demo preset or one an owner set up (stored in the data file).
+export function businessById(id) {
+  return presets[id] || store.getBusiness(id) || null;
+}
+export function listAllBusinesses() {
+  return [...Object.values(presets), ...store.listBusinesses()];
+}
 export function currentBusiness() {
-  return presets[store.getSettings().presetId] || presets.cleaning;
+  return businessById(store.getSettings().presetId) || presets.cleaning;
 }
 export function businessOf(x) {
-  return (x && presets[x.presetId]) || currentBusiness();
+  return (x && businessById(x.presetId)) || currentBusiness();
 }
 export function availableSlots(business, opts = {}) {
   return openSlots(business, store.listBookings(), opts);
@@ -175,7 +182,7 @@ export async function bookAndRequestDeposit({ leadId, serviceId, size, slotStart
     freeCancelUntil: freeCancelDeadline(slotStart),
     status: q.deposit > 0 ? 'held' : 'confirmed',
   });
-  store.addTimeline(booking.id, `Quoted ${q.service} (${q.size}) at ${usd(q.price)} and held ${booking.slotLabel}.`);
+  store.addTimeline(booking.id, `Quoted ${q.service}${q.size === 'standard' ? '' : ` (${q.size})`} at ${usd(q.price)} and held ${booking.slotLabel}.`);
   store.addTimeline(booking.id, `Terms shown to customer: ${termsLine(booking)}`);
 
   if (q.deposit <= 0) {
@@ -183,7 +190,7 @@ export async function bookAndRequestDeposit({ leadId, serviceId, size, slotStart
     return { booking: store.getBooking(booking.id), payLink: null, terms: termsLine(booking) };
   }
   const payment = await newPayment(booking, { kind: 'deposit', amount: q.deposit, label: 'Deposit' });
-  store.logActivity(`Booked ${booking.customerName}: ${booking.service}, ${booking.size} on ${booking.slotLabel}. Sent a ${usd(q.deposit)} PayPal deposit link.`, {
+  store.logActivity(`Booked ${booking.customerName}: ${booking.service}${booking.size === 'standard' ? '' : `, ${booking.size}`} on ${booking.slotLabel}. Sent a ${usd(q.deposit)} PayPal deposit link.`, {
     bookingId: booking.id,
     kind: 'deposit_requested',
   });

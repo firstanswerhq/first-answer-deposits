@@ -37,7 +37,7 @@ function bookings(list) {
     list
       .map((b) => {
         const acts = (ACTIONS[b.status] || []).map(([a, label]) => `<button class="btn secondary small" data-act="${a}" data-id="${b.id}">${label}</button>`).join('');
-        return `<tr><td><strong>${escapeHtml(b.customerName)}</strong><div class="small muted">${escapeHtml(b.service)}, ${escapeHtml(b.size)}</div></td>
+        return `<tr><td><strong>${escapeHtml(b.customerName)}</strong><div class="small muted">${escapeHtml(b.title || b.service)}</div></td>
           <td>${escapeHtml(b.appointment)}</td>
           <td><span class="status ${b.status}">${escapeHtml(b.statusWords)}</span></td>
           <td class="num">${money(b.totals.total)}</td><td class="num">${money(b.totals.paid)}${b.totals.tips ? `<div class="small muted">+${money(b.totals.tips)} tip</div>` : ''}</td><td class="num">${money(b.totals.due)}</td>
@@ -183,4 +183,11 @@ $('#reset').addEventListener('click', async () => {
 });
 
 await refresh();
+// /owner?biz=<id> opens a specific business (used by the setup page's "owner's phone" link).
+const wantBiz = new URLSearchParams(location.search).get('biz');
+if (wantBiz && lastState && lastState.business.id !== wantBiz && lastState.presets.some((p) => p.id === wantBiz)) {
+  await api('/api/owner/preset', { method: 'POST', body: { presetId: wantBiz }, headers: hdr });
+  seenOwner = 0;
+  await refresh();
+}
 listen(`/api/events?owner=1${code ? `&code=${code}` : ''}`, scheduleRefresh);

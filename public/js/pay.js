@@ -14,7 +14,7 @@ function render() {
   $('#biz-name').textContent = booking.business.name;
   $('#biz-mark').textContent = booking.business.name[0];
   $('#pay-kind').textContent = payment.kind === 'deposit' ? 'Deposit to hold your appointment' : payment.kind === 'balance' ? 'Final balance' : payment.label;
-  $('#pay-title').textContent = `${booking.service}, ${booking.size}`;
+  $('#pay-title').textContent = booking.title || booking.service;
   $('#pay-when').textContent = booking.appointment;
   const st = $('#pay-status');
   st.className = `status ${booking.status}`;
@@ -61,7 +61,7 @@ function icsFile() {
   const start = new Date(b.slotStart);
   const end = new Date(start.getTime() + (b.durationMinutes || 120) * 60000);
   const f = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//First Answer//Deposits//EN', 'BEGIN:VEVENT', `UID:${b.id}@firstanswer`, `DTSTAMP:${f(new Date())}`, `DTSTART:${f(start)}`, `DTEND:${f(end)}`, `SUMMARY:${b.service} - ${b.business.name}`, `DESCRIPTION:${b.service} (${b.size}). Booking: ${state.data.bookingUrl}`, `LOCATION:${b.address || ''}`, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//First Answer//Deposits//EN', 'BEGIN:VEVENT', `UID:${b.id}@firstanswer`, `DTSTAMP:${f(new Date())}`, `DTSTART:${f(start)}`, `DTEND:${f(end)}`, `SUMMARY:${b.service} - ${b.business.name}`, `DESCRIPTION:${b.title || b.service}. Booking: ${state.data.bookingUrl}`, `LOCATION:${b.address || ''}`, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
   return URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
 }
 
