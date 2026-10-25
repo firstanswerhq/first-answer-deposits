@@ -13,7 +13,7 @@ Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/). Run
 | Your customer's AI assistant books it (agent-to-agent, human approves in PayPal) | `/agent` |
 | A customer just texts or calls the business | `/text` |
 | The owner's phone (AI office manager, bookings, money, connections) | `/owner` |
-| Set up a brand-new business by texting seven answers | `/setup` |
+| Set up a brand-new business by texting a few answers (name, hours, prices, deposit, logo and color, PayPal email) | `/setup` |
 | Landing page | `/` |
 
 Suggested walk-through:
@@ -21,6 +21,7 @@ Suggested walk-through:
 1. Open `/agent`, tap the first chip ("Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah."). Watch the protocol trace on the right: the assistant calls the business over MCP, gets a quote, checks real availability and books. It cannot pay. Tap **Approve the deposit in PayPal** and pay with a sandbox account or test card.
 2. Open `/text`, text "Can we do Saturday instead?" The time moves and the deposit moves with it. Try "Split it with my roommate" or "Is this refundable?" on the payment page.
 3. Open `/owner`, text "done at Sarah's". She gets the final bill with a tip option. Text "who owes me?", "refund Sarah", "how did we do this week?".
+4. Open `/setup` and set up your own business by texting. Give it a logo link and a color: every page your customers see (texts, booking record, payment page) carries your brand, with a small "Powered by First Answer" line. Each demo business has its own color too.
 
 ### Sandbox test payments
 
@@ -40,7 +41,7 @@ src/
   agent/scripted.js scripted fallback so the whole app runs with no AI key
   agent/model.js   Claude, Groq or Gemini through the Vercel AI SDK
   agentic/         MCP server per business + UCP/A2A-style discovery files + the customer's assistant demo
-  setup.js         "set up by text": seven answers become a working business profile
+  setup.js         "set up by text": a few answers become a working, branded business profile
   connect.js       leads in from any app, calendar feed out, busy-time import, signed updates out to a CRM
   slots.js         open times from hours, bookings and the owner's busy calendar
   store.js         JSON file store with live events (SSE)
@@ -71,6 +72,10 @@ Every business gets:
 - a **human-approval step**: `book_appointment` holds the time and returns a PayPal approval link. Only the person can pay. The hold expires on its own if they don't.
 
 Point Claude, ChatGPT or any MCP client at the endpoint and say "book me a deep clean Friday morning, under $300."
+
+### White label
+
+Each business sets a logo link and a brand color (during setup by text, or later on the owner page under **Your look**). The text thread, the booking record and the payment page then carry that business's look, with one small "Powered by First Answer" line. The owner page keeps the First Answer look; customers only ever see the business.
 
 ## Run it locally
 
