@@ -5,6 +5,7 @@ export const presets = {
   cleaning: {
     id: 'cleaning',
     name: 'Sparkle & Shine Home Cleaning',
+    brand: { color: '#0e9f8f', logoUrl: '' },
     trade: 'home cleaning',
     city: 'Nashville, TN',
     timezone: 'America/Chicago',
@@ -26,6 +27,7 @@ export const presets = {
   detailing: {
     id: 'detailing',
     name: 'Gloss Boss Mobile Detailing',
+    brand: { color: '#f26b1d', logoUrl: '' },
     trade: 'mobile auto detailing',
     city: 'Nashville, TN',
     timezone: 'America/Chicago',
@@ -47,6 +49,7 @@ export const presets = {
   hvac: {
     id: 'hvac',
     name: 'Cool Breeze Heating & Air',
+    brand: { color: '#1d7bf2', logoUrl: '' },
     trade: 'heating and air conditioning',
     city: 'Nashville, TN',
     timezone: 'America/Chicago',

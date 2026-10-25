@@ -1,4 +1,4 @@
-import { api, linkify, listen, $, speechKit, clock } from './common.js';
+import { api, linkify, listen, $, speechKit, clock, applyBrand } from './common.js';
 import { registerWebMcpTools } from './webmcp.js';
 
 const BIZ = [
@@ -94,10 +94,11 @@ async function start(fresh = false) {
     const r = await api('/api/text/start', { method: 'POST', body: { presetId } });
     leadId = r.leadId;
     store.set(key, leadId);
-    data = { business: r.business, messages: [] };
+    data = { business: r.business, brand: r.brand, messages: [] };
   }
   $('#biz').textContent = data.business;
   $('#avatar').textContent = data.business[0];
+  applyBrand(data.brand, { mark: $('#avatar'), name: $('#biz') });
   renderPick();
   $('#call-who').textContent = data.business;
   renderMessages(data.messages);

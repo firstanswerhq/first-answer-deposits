@@ -8,6 +8,7 @@ const EXAMPLES = {
   hours: ['Mon-Fri, 8am, 11am and 2pm', 'Tue-Sat 9, 12 and 3'],
   services: ['Mowing: small yard $45, large yard $65\nAeration: $120', 'Bath and brush: small dog $45, large dog $75\nFull groom: small dog $75, large dog $110'],
   deposit: ['$25', '25%', 'no deposit'],
+  brand: ['green', '#2a9d8f', 'skip'],
   payout: [],
 };
 
@@ -50,6 +51,9 @@ function preview() {
     rows.push([s.name, Object.entries(s.sizes).map(([k, v]) => (k === 'standard' ? money(v) : `${k} ${money(v)}`)).join(' · ')]);
   }
   if (p.payoutEmail) rows.push(['Paid to', p.payoutEmail]);
+  if (p.brand && (p.brand.color || p.brand.logoUrl)) rows.push(['Your look', [p.brand.logoUrl ? 'logo' : '', p.brand.color].filter(Boolean).join(' · ')]);
+  $('#preview-card').style.borderTop = p.brand?.color ? `6px solid ${p.brand.color}` : '';
+  if (p.brand?.logoUrl) { $('#pv-name').innerHTML = `<img src="${escapeHtml(p.brand.logoUrl)}" alt="" referrerpolicy="no-referrer" style="height: 28px; width: auto; vertical-align: middle; margin-right: 8px; border-radius: 6px" />${escapeHtml(p.name || 'Your business')}`; }
   $('#pv-rows').innerHTML = rows.map(([a, b]) => `<div class="row"><span class="muted">${escapeHtml(a)}</span><strong style="text-align:right">${escapeHtml(b)}</strong></div>`).join('');
   if (p.deposit) {
     $('#pv-deposit').classList.remove('hidden');

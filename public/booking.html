@@ -32,9 +32,10 @@
       <ul class="feed" id="timeline" style="max-height: none"></ul>
     </section>
     <footer>Questions? Just text back. Need to change something? Text "move me to Saturday" or "cancel".</footer>
+    <div class="powered" id="powered"></div>
   </main>
   <script type="module">
-    import { api, money, $, escapeHtml, clock } from '/js/common.js';
+    import { api, money, $, escapeHtml, clock, applyBrand } from '/js/common.js';
     const id = location.pathname.split('/').pop();
     const k = new URLSearchParams(location.search).get('k');
     async function load() {
@@ -43,6 +44,7 @@
         document.title = `${b.business.name} · Your booking`;
         $('#biz').textContent = b.business.name;
         $('#mark').textContent = b.business.name[0];
+        applyBrand(b.business.brand, { mark: $('#mark'), name: $('#biz'), powered: $('#powered') });
         $('#who').textContent = `Booking for ${b.customerName}`;
         $('#title').textContent = b.title || b.service;
         $('#when').textContent = b.appointment;

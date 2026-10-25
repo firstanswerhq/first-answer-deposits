@@ -16,10 +16,10 @@ const B = await import('../src/bookings.js');
 const S = await import('../src/setup.js');
 const { replyToCustomer } = await import('../src/agent/customer.js');
 
-test('seven answers make a bookable business with a deposit and a payout email', async () => {
+test('eight answers make a bookable, branded business with a deposit and a payout email', async () => {
   store.resetAll();
   let profile = {};
-  const answers = { name: 'Franklin Lawn Care', trade: 'lawn care', city: 'Franklin, TN', hours: 'Mon-Fri, 8am, 11am and 2pm', services: 'Mowing: small yard $45, large yard $65\nAeration: $120', deposit: '$25', payout: 'pay@franklinlawn.example' };
+  const answers = { name: 'Franklin Lawn Care', trade: 'lawn care', city: 'Franklin, TN', hours: 'Mon-Fri, 8am, 11am and 2pm', services: 'Mowing: small yard $45, large yard $65\nAeration: $120', deposit: '$25', brand: 'green, logo https://franklinlawn.example/logo.png', payout: 'pay@franklinlawn.example' };
   for (const step of S.STEPS) {
     const r = S.applyAnswer(step.id, answers[step.id], profile);
     assert.ok(r.ok, `${step.id}: ${r.say}`);
@@ -31,6 +31,8 @@ test('seven answers make a bookable business with a deposit and a payout email',
   assert.deepEqual(biz.slotTimes, ['08:00', '11:00', '14:00']);
   assert.equal(biz.deposit.amount, 25);
   assert.equal(biz.payoutEmail, 'pay@franklinlawn.example');
+  assert.deepEqual(biz.brand, { color: '#1f9d55', logoUrl: 'https://franklinlawn.example/logo.png' });
+  assert.deepEqual(S.parseBrand('skip'), { color: '', logoUrl: '' });
   assert.ok(B.businessById('franklin-lawn-care'));
 
   // A customer books the new business by text (scripted mode).

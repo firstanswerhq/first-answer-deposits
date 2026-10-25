@@ -116,3 +116,42 @@ export function speechKit() {
     },
   };
 }
+
+// ---------- white label ----------
+// Paint the page in the business's color and show its logo. Falls back to the First Answer look.
+function hexToRgb(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [n >> 16, (n >> 8) & 255, n & 255];
+}
+const mix = (rgb, to, k) => rgb.map((c, i) => Math.round(c + (to[i] - c) * k));
+const rgbStr = (rgb, a) => `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`;
+export function applyBrand(brand, { mark = null, name = null, powered = null } = {}) {
+  const b = brand || {};
+  const rgb = hexToRgb(b.color);
+  const root = document.documentElement.style;
+  if (rgb) {
+    const dark = mix(rgb, [20, 24, 60], 0.35);
+    const light = mix(rgb, [255, 255, 255], 0.9);
+    root.setProperty('--brand-1', b.color);
+    root.setProperty('--brand-2', `rgb(${dark.join(',')})`);
+    root.setProperty('--brand-3', b.color);
+    root.setProperty('--grad', `linear-gradient(135deg, ${b.color}, rgb(${dark.join(',')}))`);
+    root.setProperty('--info-bg', `rgb(${light.join(',')})`);
+    root.setProperty('--brand-shadow', rgbStr(rgb, 0.28));
+  }
+  if (mark) {
+    if (b.logoUrl) {
+      mark.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = b.logoUrl;
+      img.alt = '';
+      img.referrerPolicy = 'no-referrer';
+      img.onerror = () => { mark.textContent = (name && name.textContent ? name.textContent : 'B')[0]; };
+      mark.appendChild(img);
+      mark.classList.add('logo');
+    } else if (name && name.textContent) mark.textContent = name.textContent[0];
+  }
+  if (powered) powered.textContent = `Powered by ${b.poweredBy || 'First Answer'}`;
+}

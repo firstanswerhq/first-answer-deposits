@@ -95,9 +95,17 @@ async function connections() {
   $('#c-busy').value = c.busyCalendarUrl;
   $('#c-webhook').value = c.webhookUrl;
   $('#c-payout').value = c.payoutEmail;
+  $('#c-logo').value = c.brand.logoUrl || '';
+  $('#c-color').value = c.brand.color || '#4f5bff';
+  $('#c-color-hex').textContent = c.brand.color || 'default';
+  const pv = $('#c-preview');
+  pv.textContent = c.business.name[0];
+  pv.style.background = c.brand.color || '';
+  if (c.brand.logoUrl) pv.innerHTML = `<img src="${escapeHtml(c.brand.logoUrl)}" alt="" referrerpolicy="no-referrer" />`;
   const ro = !c.business.custom;
-  for (const id of ['c-busy', 'c-webhook', 'c-payout']) $(`#${id}`).disabled = ro;
+  for (const id of ['c-busy', 'c-webhook', 'c-payout', 'c-logo', 'c-color']) $(`#${id}`).disabled = ro;
   $('#c-save').disabled = ro;
+  $('#c-save-brand').disabled = ro;
   $('#c-note').textContent = ro ? 'Demo businesses are read-only. Set up your own at /setup to connect apps.' : c.webhookSecret ? `Webhook signing secret: ${c.webhookSecret}` : '';
 }
 const copy = (id) => async () => {
@@ -121,15 +129,22 @@ $('#c-test-lead').addEventListener('click', async () => {
     refresh();
   }
 });
-$('#c-save').addEventListener('click', async () => {
+async function saveConnections() {
   try {
-    await api('/api/owner/connections', { method: 'POST', headers: hdr, body: { busyCalendarUrl: $('#c-busy').value, webhookUrl: $('#c-webhook').value, payoutEmail: $('#c-payout').value } });
+    await api('/api/owner/connections', {
+      method: 'POST',
+      headers: hdr,
+      body: { busyCalendarUrl: $('#c-busy').value, webhookUrl: $('#c-webhook').value, payoutEmail: $('#c-payout').value, logoUrl: $('#c-logo').value, brandColor: $('#c-color').value },
+    });
     toast('Saved.');
     connections();
   } catch (err) {
     toast(err.message, 'bad');
   }
-});
+}
+$('#c-save').addEventListener('click', saveConnections);
+$('#c-save-brand').addEventListener('click', saveConnections);
+$('#c-color').addEventListener('input', () => { $('#c-color-hex').textContent = $('#c-color').value; });
 
 function scheduleRefresh() {
   clearTimeout(refreshTimer);

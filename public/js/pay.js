@@ -1,4 +1,4 @@
-import { api, money, linkify, listen, $, speechKit, escapeHtml } from './common.js';
+import { api, money, linkify, listen, $, speechKit, escapeHtml, applyBrand } from './common.js';
 import { registerWebMcpTools } from './webmcp.js';
 
 const paymentId = location.pathname.split('/').pop();
@@ -14,6 +14,7 @@ function render() {
   document.title = `${booking.business.name} · Secure payment`;
   $('#biz-name').textContent = booking.business.name;
   $('#biz-mark').textContent = booking.business.name[0];
+  applyBrand(booking.business.brand, { mark: $('#biz-mark'), name: $('#biz-name'), powered: $('#powered') });
   $('#pay-kind').textContent = payment.kind === 'deposit' ? 'Deposit to hold your appointment' : payment.kind === 'balance' ? 'Final balance' : payment.label;
   $('#pay-title').textContent = booking.title || booking.service;
   $('#pay-when').textContent = booking.appointment;

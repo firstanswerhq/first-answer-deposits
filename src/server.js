@@ -62,12 +62,17 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => 
   res.status(500).json({ error: err.message });
 });
 
+// What customer pages need to look like the business: its color and logo, plus the "powered by" line.
+function brandOf(business) {
+  return { color: business.brand?.color || '', logoUrl: business.brand?.logoUrl || '', poweredBy: 'First Answer' };
+}
+
 function publicBooking(b) {
   if (!b) return null;
   const business = B.businessOf(b);
   return {
     id: b.id,
-    business: { name: business.name, trade: business.trade, city: business.city },
+    business: { name: business.name, trade: business.trade, city: business.city, brand: brandOf(business) },
     customerName: b.customerName,
     service: b.service,
     size: b.size === 'standard' ? '' : b.size,
@@ -103,13 +108,13 @@ app.get('/api/health', (req, res) => {
 app.post('/api/text/start', wrap(async (req, res) => {
   const presetId = B.businessById(req.body.presetId) ? req.body.presetId : store.getSettings().presetId;
   const lead = store.createLead({ channel: req.body.channel || 'text', presetId, phone: req.body.phone || '' });
-  res.json({ leadId: lead.id, business: B.businessById(presetId).name });
+  res.json({ leadId: lead.id, business: B.businessById(presetId).name, brand: brandOf(B.businessById(presetId)) });
 }));
 
 app.get('/api/text/:leadId', (req, res) => {
   const lead = store.getLead(req.params.leadId);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  res.json({ leadId: lead.id, business: B.businessOf(lead).name, messages: lead.messages });
+  res.json({ leadId: lead.id, business: B.businessOf(lead).name, brand: brandOf(B.businessOf(lead)), messages: lead.messages });
 });
 
 app.post('/api/text/:leadId', rateLimit(40, 10 * 60 * 1000), wrap(async (req, res) => {
@@ -233,6 +238,7 @@ app.get('/api/owner/connections', ownerOnly, (req, res) => {
     webhookUrl: business.webhookUrl || '',
     webhookSecret: business.webhookSecret || '',
     payoutEmail: business.payoutEmail || '',
+    brand: brandOf(business),
     mcpUrl: `${config.publicUrl}/mcp/${business.id}`,
   });
 });
@@ -240,7 +246,13 @@ app.post('/api/owner/connections', ownerOnly, wrap(async (req, res) => {
   const business = B.currentBusiness();
   if (!business.custom) return res.status(400).json({ error: 'The demo businesses are read-only. Set up your own at /setup to connect apps.' });
   const url = (v) => (v && /^https?:\/\//.test(String(v)) ? String(v).trim().slice(0, 500) : '');
-  const patch = { busyCalendarUrl: url(req.body.busyCalendarUrl), webhookUrl: url(req.body.webhookUrl), payoutEmail: String(req.body.payoutEmail || '').trim().slice(0, 120) };
+  const color = /^#[0-9a-f]{6}$/i.test(String(req.body.brandColor || '')) ? String(req.body.brandColor).toLowerCase() : '';
+  const patch = {
+    busyCalendarUrl: url(req.body.busyCalendarUrl),
+    webhookUrl: url(req.body.webhookUrl),
+    payoutEmail: String(req.body.payoutEmail || '').trim().slice(0, 120),
+    brand: { color, logoUrl: url(req.body.logoUrl) },
+  };
   if (patch.webhookUrl && !business.webhookSecret) patch.webhookSecret = store.newId('whsec');
   store.saveBusiness({ ...business, ...patch });
   res.json({ ok: true });

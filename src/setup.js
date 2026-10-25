@@ -15,8 +15,25 @@ export const STEPS = [
   { id: 'hours', ask: 'What days do you work, and what start times can customers book? For example: Mon-Fri, 8am, 11am and 2pm.' },
   { id: 'services', ask: 'Now your services and prices, one per line. For example:\nMowing: small yard $45, large yard $65\nAeration: $120' },
   { id: 'deposit', ask: 'How much should a customer pay to hold a time? A flat amount like $50, or a percent like 25%. (Or say "no deposit".)' },
+  { id: 'brand', ask: 'Your look, optional: paste a link to your logo image and a brand color like #2a9d8f (or a color name). Your customers see your logo and color on every page, not ours. Or say "skip".' },
   { id: 'payout', ask: 'Last one: which PayPal email should your money go to when a job is paid?' },
 ];
+
+const COLOR_NAMES = { red: '#d7263d', orange: '#f26b1d', yellow: '#e0a800', gold: '#c9a227', green: '#1f9d55', teal: '#0e9f8f', blue: '#1d7bf2', navy: '#1b2a6b', purple: '#7c3aed', pink: '#e5489d', black: '#1a1a1a', gray: '#5b6270', grey: '#5b6270', brown: '#7b4b2a' };
+
+// "logo: https://x/logo.png, color #2a9d8f" or "blue" or "skip" -> { color, logoUrl } (either may be empty).
+export function parseBrand(text) {
+  const t = String(text || '').trim();
+  if (!t || /^(skip|no|none|later|nope)\b/i.test(t)) return { color: '', logoUrl: '' };
+  const url = (t.match(/https?:\/\/\S+/i) || [''])[0].replace(/[),.;]+$/, '');
+  let color = (t.match(/#(?:[0-9a-f]{6}|[0-9a-f]{3})\b/i) || [''])[0].toLowerCase();
+  if (!color) {
+    const word = Object.keys(COLOR_NAMES).find((c) => new RegExp(`\\b${c}\\b`, 'i').test(t.replace(url, '')));
+    if (word) color = COLOR_NAMES[word];
+  }
+  if (color.length === 4) color = `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`;
+  return { color, logoUrl: url };
+}
 
 export function parseHours(text) {
   const t = String(text || '').toLowerCase();
@@ -136,6 +153,11 @@ export function applyAnswer(stepId, text, profile = {}) {
       if (!d) return { ok: false, say: 'Just a number works, like $50 or 25%.' };
       return { ok: true, patch: { deposit: d }, say: d.amount === 0 ? 'No deposit. Customers book free and pay after the job.' : d.type === 'percent' ? `${d.percent}% deposit, applied to the bill.` : `$${d.amount} deposit, applied to the bill.` };
     }
+    case 'brand': {
+      const b = parseBrand(t);
+      const parts = [b.logoUrl ? 'logo saved' : '', b.color ? `color ${b.color}` : ''].filter(Boolean);
+      return { ok: true, patch: { brand: b }, say: parts.length ? `Looks good: ${parts.join(', ')}. Your customers will see it on the booking and payment pages.` : 'No problem, you can add a logo and color later from the owner page.' };
+    }
     case 'payout': {
       const e = parseEmail(t);
       if (!e) return { ok: false, say: "That doesn't look like an email. Which email is your PayPal under?" };
@@ -182,6 +204,7 @@ export function createBusiness(profile) {
     plan: null,
     descriptor: profile.name.replace(/[^A-Za-z0-9 ]/g, '').toUpperCase().slice(0, 22),
     payoutEmail: profile.payoutEmail || null,
+    brand: { color: profile.brand?.color || '', logoUrl: profile.brand?.logoUrl || '' },
     createdAt: new Date().toISOString(),
   };
   store.saveBusiness(business);
