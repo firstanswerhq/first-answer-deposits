@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Owner · First Answer Deposits</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .owner { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; max-width: 1280px; margin: 0 auto; padding: 24px 16px 48px; }
+    @media (max-width: 1000px) { .owner { grid-template-columns: 1fr; } }
+    .owner .phone { height: 720px; }
+    .phone-chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; background: #fafbfd; border-top: 1px solid var(--line); }
+    .phone-chips .chip { white-space: nowrap; font-size: 12px; padding: 6px 10px; }
+    select.biz { border-radius: 999px; padding: 6px 12px; border: 0; font-weight: 600; }
+    .section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" style="color: #fff; text-decoration: none"><div class="brand-mark">F</div>First Answer Deposits <span class="muted" style="color: #9aa0d6; font-weight: 600">· Owner</span></a>
+    <div class="right">
+      <select class="biz" id="biz" title="Which business"></select>
+      <span class="badge" id="pp-badge">PayPal</span>
+      <span class="badge" id="ai-badge">AI</span>
+      <a class="badge" href="/text" target="_blank" style="text-decoration: none">Customer's phone &rarr;</a>
+      <button class="badge" id="reset" style="border: 0">Reset demo</button>
+    </div>
+  </header>
+
+  <div class="owner">
+    <div>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="phone-screen">
+          <div class="phone-head">
+            <div class="avatar">AI</div>
+            <div class="name">Your AI office manager</div>
+            <div class="sub">Text it like you'd text a person</div>
+          </div>
+          <div class="thread" id="thread"></div>
+          <div class="phone-chips" id="chips">
+            <button class="chip" data-q="Who still owes me money?">Who owes me?</button>
+            <button class="chip" data-q="Send reminders to everyone who owes">Send reminders</button>
+            <button class="chip" data-q="How did we do this week?">How did we do?</button>
+            <button class="chip" data-q="Text past customers who are due to book again">Rebook past customers</button>
+          </div>
+          <form class="composer" id="composer">
+            <input id="msg" placeholder='Try "done at Sarah&apos;s" or "refund Mike"' autocomplete="off" maxlength="500" />
+            <button class="round" type="submit" title="Send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; gap: 20px">
+      <div class="kpis" id="kpis"></div>
+      <div class="card">
+        <div class="section-title"><h2>Bookings</h2><span class="small muted">Every booking keeps what's booked, paid and owed in one record</span></div>
+        <div style="overflow-x: auto"><table class="list" id="bookings"></table></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Live activity</h3>
+          <ul class="feed" id="feed"></ul>
+        </div>
+        <div class="card">
+          <h3>Needs you</h3>
+          <ul class="feed" id="needs"></ul>
+          <h3 style="margin-top: 16px">Waitlist</h3>
+          <ul class="feed" id="waitlist"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/js/owner.js"></script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Your booking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark" id="mark">·</div><span id="biz">Your booking</span></div>
+    <div class="right"><span class="badge">Payments by PayPal</span></div>
+  </header>
+  <main class="wrap" style="max-width: 720px">
+    <section class="card">
+      <div class="small muted" id="who"></div>
+      <h1 style="margin: 4px 0; font-size: 24px; letter-spacing: -0.02em" id="title">Loading…</h1>
+      <div class="muted" id="when"></div>
+      <div style="margin-top: 10px"><span class="status" id="status"></span></div>
+      <ul class="rows" id="rows"></ul>
+      <div class="note" id="policy"></div>
+      <a class="btn primary hidden" id="pay" style="width: 100%; margin-top: 14px">Pay what's due</a>
+    </section>
+    <section class="card" style="margin-top: 16px">
+      <h3>Payments</h3>
+      <table class="list" id="payments"></table>
+    </section>
+    <section class="card" style="margin-top: 16px">
+      <h3>History</h3>
+      <ul class="feed" id="timeline" style="max-height: none"></ul>
+    </section>
+    <footer>Questions? Just text back. Need to change something? Text "move me to Saturday" or "cancel".</footer>
+  </main>
+  <script type="module">
+    import { api, money, $, escapeHtml, clock } from '/js/common.js';
+    const id = location.pathname.split('/').pop();
+    const k = new URLSearchParams(location.search).get('k');
+    async function load() {
+      try {
+        const { booking: b, payLink } = await api(`/api/booking/${id}?k=${encodeURIComponent(k || '')}`);
+        document.title = `${b.business.name} · Your booking`;
+        $('#biz').textContent = b.business.name;
+        $('#mark').textContent = b.business.name[0];
+        $('#who').textContent = `Booking for ${b.customerName}`;
+        $('#title').textContent = `${b.service}, ${b.size}`;
+        $('#when').textContent = b.appointment;
+        $('#status').className = `status ${b.status}`;
+        $('#status').textContent = b.statusWords;
+        const t = b.totals;
+        const rows = [['Total', money(t.total)], ['Paid so far', money(t.paid)]];
+        if (t.tips) rows.push(['Tips', money(t.tips)]);
+        if (t.refunded) rows.push(['Refunded', money(t.refunded)]);
+        rows.push(['Still owed', money(t.due), 'due']);
+        $('#rows').innerHTML = rows.map(([a, v, c]) => `<li class="${c || ''}"><span>${a}</span><strong>${v}</strong></li>`).join('');
+        $('#policy').innerHTML = ['canceled', 'refunded', 'paid_in_full', 'no_show'].includes(b.status)
+          ? 'This booking is closed. Everything that happened is listed below.'
+          : `Free to cancel or move until <strong>${escapeHtml(b.freeCancelUntil)}</strong>. Rescheduling is always free; anything you've paid moves with the booking.`;
+        if (payLink) { $('#pay').href = payLink; $('#pay').classList.remove('hidden'); } else $('#pay').classList.add('hidden');
+        $('#payments').innerHTML = b.payments.length
+          ? '<tr><th>What</th><th>How</th><th>Status</th><th class="num">Amount</th></tr>' + b.payments.map((p) => `<tr><td>${escapeHtml(p.label || p.kind)}</td><td>${escapeHtml(p.via || '')}</td><td>${p.refund ? `Refunded ${money(p.refund.amount)}<div class="small muted">Ref ${escapeHtml(p.refund.refundId)}</div>` : escapeHtml(p.status)}</td><td class="num">${money(p.amount)}${p.tip ? `<div class="small muted">+${money(p.tip)} tip</div>` : ''}</td></tr>`).join('')
+          : '<tr><td class="muted">No payments yet.</td></tr>';
+        $('#timeline').innerHTML = b.timeline.map((x) => `<li><time>${new Date(x.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${clock(x.at)}</time>${escapeHtml(x.text)}</li>`).join('');
+      } catch (err) {
+        $('#title').textContent = 'Booking not found';
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
