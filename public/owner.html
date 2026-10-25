@@ -9,7 +9,8 @@
   <link rel="stylesheet" href="/css/app.css" />
   <style>
     .owner { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; max-width: 1280px; margin: 0 auto; padding: 24px 16px 48px; }
-    @media (max-width: 1000px) { .owner { grid-template-columns: 1fr; } }
+    @media (max-width: 1000px) { .owner { grid-template-columns: minmax(0, 1fr); padding: 16px 12px; } .phone { max-width: 100%; } }
+    @media (max-width: 600px) { .phone-hide { display: none !important; } select.biz { max-width: 170px; } .owner .phone { height: 600px; } }
     .owner .phone { height: 720px; }
     .phone-chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; background: #fafbfd; border-top: 1px solid var(--line); }
     .phone-chips .chip { white-space: nowrap; font-size: 12px; padding: 6px 10px; }
@@ -25,12 +26,12 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" style="color: #fff; text-decoration: none"><div class="brand-mark">F</div>First Answer Deposits <span class="muted" style="color: #9aa0d6; font-weight: 600">· Owner</span></a>
+    <a class="brand" href="/" style="color: #fff; text-decoration: none"><div class="brand-mark">F</div><span class="phone-hide">First Answer Deposits</span> <span class="muted" style="color: #9aa0d6; font-weight: 600">Owner</span></a>
     <div class="right">
       <select class="biz" id="biz" title="Which business"></select>
-      <span class="badge" id="pp-badge">PayPal</span>
-      <span class="badge" id="ai-badge">AI</span>
-      <a class="badge" href="/text" target="_blank" style="text-decoration: none">Customer's phone &rarr;</a>
+      <span class="badge phone-hide" id="pp-badge">PayPal</span>
+      <span class="badge phone-hide" id="ai-badge">AI</span>
+      <a class="badge phone-hide" href="/text" target="_blank" style="text-decoration: none">Customer's phone &rarr;</a>
       <button class="badge" id="reset" style="border: 0">Reset demo</button>
     </div>
   </header>

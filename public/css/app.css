@@ -116,7 +116,7 @@ input, textarea, select { font: inherit; color: inherit; }
 
 /* ---------- phone ---------- */
 .phone {
-  width: 100%; max-width: 390px; height: 760px; max-height: calc(100vh - 120px); min-height: 560px;
+  width: 100%; max-width: 390px; min-width: 0; height: 760px; max-height: calc(100vh - 120px); min-height: 560px;
   margin: 0 auto; background: #0d0f1a; border-radius: 46px; padding: 12px; box-shadow: 0 30px 60px rgba(11, 16, 48, 0.35);
   position: relative;
 }

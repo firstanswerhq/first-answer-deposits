@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/css/app.css" />
   <style>
     body { background: radial-gradient(1200px 600px at 20% -10%, #2a2f7a 0%, transparent 60%), var(--navy); min-height: 100vh; }
-    .stage { display: grid; grid-template-columns: 1fr 420px; gap: 32px; max-width: 1080px; margin: 0 auto; padding: 28px 16px; align-items: center; color: #fff; }
+    .stage { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 32px; max-width: 1080px; margin: 0 auto; padding: 28px 16px; align-items: center; color: #fff; }
     .stage h1 { font-size: 34px; letter-spacing: -0.02em; margin: 0 0 10px; }
     .stage p { color: #c9cdf2; line-height: 1.55; }
     .pick { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0; }
@@ -17,7 +17,7 @@
     .pick button.on { background: #fff; color: var(--navy); }
     .try { list-style: none; padding: 0; margin: 0; color: #c9cdf2; font-size: 14px; }
     .try li { margin: 6px 0; }
-    @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } .intro { order: 2; } }
+    @media (max-width: 900px) { .stage { grid-template-columns: minmax(0, 1fr); padding: 16px 12px; } .intro { order: 2; } .phone { max-width: 100%; } }
   </style>
 </head>
 <body>

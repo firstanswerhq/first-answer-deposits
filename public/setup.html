@@ -10,7 +10,7 @@
   <style>
     body { background: radial-gradient(1200px 600px at 20% -10%, #2a2f7a 0%, var(--navy) 55%); min-height: 100vh; }
     .setup { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 28px; max-width: 1180px; margin: 0 auto; padding: 28px 16px 48px; align-items: start; }
-    @media (max-width: 1000px) { .setup { grid-template-columns: 1fr; } }
+    @media (max-width: 1000px) { .setup { grid-template-columns: minmax(0, 1fr); padding: 16px 12px; } .phone { max-width: 100%; } }
     .intro { color: #fff; padding-top: 24px; }
     .intro h1 { font-size: clamp(28px, 4vw, 42px); line-height: 1.08; letter-spacing: -0.03em; margin: 0 0 12px; }
     .intro h1 span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
