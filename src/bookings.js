@@ -233,6 +233,7 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
         { kind: 'receipt' },
       );
       store.logActivity(`Paid in full: ${b.customerName}, ${usd(after.total)}${p.tip ? ` + ${usd(p.tip)} tip` : ''}.`, { bookingId: b.id, kind: 'paid_in_full' });
+      payoutForBooking(b.id).catch((e) => console.error('payout', e.message));
     } else {
       store.addMessage(b.leadId, 'assistant', `Got ${usd(p.amount)}${who}, thank you. ${usd(after.due)} is still open on this job.`, { kind: 'partial' });
       store.logActivity(`Partial payment: ${usd(p.amount)} from ${b.customerName}${who}. ${usd(after.due)} still due.`, { bookingId: b.id });
@@ -483,6 +484,7 @@ export async function markCompleted(bookingId) {
   store.addTimeline(b.id, `Job marked done. Balance ${usd(t.due)}.`);
   if (t.due <= 0) {
     store.addMessage(b.leadId, 'assistant', `All done, and you're paid up. Thank you! Receipt: ${bookingPageUrl(b)}`, { kind: 'receipt' });
+    await payoutForBooking(b.id).catch((e) => console.error('payout', e.message));
     return { booking: store.getBooking(b.id), payLink: null };
   }
   const payment = await newPayment(store.getBooking(b.id), { kind: 'balance', amount: t.due, label: 'Balance' });
@@ -591,6 +593,28 @@ export async function sendRebookNudges({ force = false } = {}) {
   return { nudged };
 }
 
+// ---------------- payout to the business when the job is done ----------------
+// Customers pay the platform's PayPal account. Once a job is paid in full, the net (gross minus refunds and
+// PayPal's fees) goes to the owner's PayPal email through Payouts. In demo mode it is recorded without moving money.
+export async function payoutForBooking(bookingId) {
+  const b = store.getBooking(bookingId);
+  if (!b || b.payout || b.status !== 'paid_in_full') return null;
+  const business = businessOf(b);
+  const t = totals(b);
+  const fees = sum(b.payments.filter((p) => p.status === 'completed').map((p) => p.fee || 0));
+  const amount = round2(t.paid + t.tips - fees);
+  if (amount <= 0) return null;
+  const email = business.payoutEmail || null;
+  let result = { batchId: 'DEMO-PAYOUT', status: 'demo' };
+  if (paypalReady && email) {
+    result = await paypal.sendPayout({ bookingId: b.id, amount, email, note: `${b.service} for ${b.customerName}, ${b.slotLabel}` });
+  }
+  store.updateBooking(b.id, { payout: { amount, email, batchId: result.batchId, status: result.status, at: new Date().toISOString() } });
+  store.addTimeline(b.id, `Paid out ${usd(amount)} to the business${email ? ` (${email})` : ''}. PayPal payout ${result.batchId}.`);
+  store.logActivity(`${usd(amount)} from ${b.customerName}'s job is on its way to your PayPal${email ? ` (${email})` : ''}.`, { bookingId: b.id, kind: 'payout' });
+  return store.getBooking(b.id);
+}
+
 // ---------------- owner money view ----------------
 export function moneySummary({ days = 7 } = {}) {
   const since = Date.now() - days * 86400000;
@@ -602,7 +626,8 @@ export function moneySummary({ days = 7 } = {}) {
   const tips = sum(done.map((p) => p.tip || 0));
   const pending = sum(payments.filter((p) => p.status === 'pending').map((p) => p.amount));
   const kept = sum(store.listBookings().filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
-  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, depositsKeptFromLateCancels: kept };
+  const paidOut = sum(store.listBookings().filter((b) => b.payout && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
+  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, depositsKeptFromLateCancels: kept, paidOut };
 }
 
 // ---------------- dispute evidence ----------------

@@ -208,6 +208,33 @@ export async function cancelInvoice(invoiceId, { subject, note } = {}) {
   return { ok: true };
 }
 
+// ---------------- Payouts: the business gets its money when the job is done ----------------
+// First Answer collects on the platform account; Payouts sends the net to the owner's PayPal email.
+export async function sendPayout({ bookingId, amount, email, note, currency = 'USD' }) {
+  const data = await api('/v1/payments/payouts', {
+    method: 'POST',
+    idempotencyKey: `payout-${bookingId}-${Number(amount).toFixed(2)}`,
+    body: {
+      sender_batch_header: {
+        sender_batch_id: `${bookingId}-${Date.now().toString(36)}`,
+        email_subject: 'You have been paid for a completed job',
+        email_message: String(note || 'Payment for a completed booking.').slice(0, 1000),
+      },
+      items: [
+        {
+          recipient_type: 'EMAIL',
+          receiver: email,
+          amount: money(amount, currency),
+          note: String(note || '').slice(0, 4000),
+          sender_item_id: bookingId,
+          notification_language: 'en-US',
+        },
+      ],
+    },
+  });
+  return { batchId: data.batch_header?.payout_batch_id || null, status: data.batch_header?.batch_status || null };
+}
+
 // ---------------- Webhooks ----------------
 // PayPal recommends verifying with the exact body it sent, so the raw string is spliced in as-is.
 export async function verifyWebhook(headers, rawBody) {
