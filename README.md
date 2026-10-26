@@ -61,7 +61,7 @@ test/              node:test end-to-end tests in demo mode
 
 ### AI used
 
-Any model through the Vercel AI SDK: **Claude** (`ANTHROPIC_API_KEY`), **Groq** (`GROQ_API_KEY`, free tier) or **Gemini** (`GOOGLE_GENERATIVE_AI_API_KEY`). The customer agent, the owner agent and the customer's own assistant all use tool calling over the same booking engine, so the AI can never invent a price or a time. With no key set, a scripted bot runs the same flows so the app can be tried anywhere.
+Any model through the Vercel AI SDK: **Claude** (`ANTHROPIC_API_KEY`), **Meta Llama** (`META_API_KEY`, the Llama API's OpenAI-compatible endpoint), **Groq** (`GROQ_API_KEY`, free tier) or **Gemini** (`GOOGLE_GENERATIVE_AI_API_KEY`). The customer agent, the owner agent and the customer's own assistant all use tool calling over the same booking engine, so the AI can never invent a price or a time. With no key set, a scripted bot runs the same flows so the app can be tried anywhere.
 
 ### Agentic commerce
 

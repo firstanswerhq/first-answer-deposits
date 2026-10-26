@@ -21,6 +21,10 @@ export const config = {
     groqModel: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
     googleKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || '',
     googleModel: process.env.GOOGLE_MODEL || 'gemini-3.5-flash-lite',
+    // Meta's Llama API (OpenAI-compatible). Any other OpenAI-compatible host works too: set META_API_BASE.
+    metaKey: process.env.META_API_KEY || process.env.LLAMA_API_KEY || '',
+    metaModel: process.env.META_MODEL || 'Llama-4-Maverick-17B-128E-Instruct-FP8',
+    metaBase: process.env.META_API_BASE || 'https://api.llama.com/compat/v1',
   },
   ownerPasscode: process.env.OWNER_PASSCODE || '',
   dataFile: process.env.DATA_FILE || fileURLToPath(new URL('../data/db.json', import.meta.url)),
@@ -30,4 +34,4 @@ export const paypalApiBase =
   config.paypal.env === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
 
 export const paypalReady = Boolean(config.paypal.clientId && config.paypal.clientSecret);
-export const aiReady = Boolean(config.ai.googleKey || config.ai.anthropicKey || config.ai.groqKey);
+export const aiReady = Boolean(config.ai.googleKey || config.ai.anthropicKey || config.ai.groqKey || config.ai.metaKey);

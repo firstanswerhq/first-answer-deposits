@@ -2,23 +2,30 @@ import { generateText } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGroq } from '@ai-sdk/groq';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { config } from '../config.js';
 
 // Which AI runs the front desk. Set one key (or several plus AI_PROVIDER to pick):
 //   ANTHROPIC_API_KEY  -> Claude (best quality)
 //   GROQ_API_KEY       -> Groq free tier (fast, generous free limits)
 //   GOOGLE_GENERATIVE_AI_API_KEY -> Gemini free tier
+//   META_API_KEY       -> Meta's Llama API (OpenAI-compatible endpoint; META_MODEL / META_API_BASE to change)
 // With no key the app runs a scripted demo bot, so anyone can try the full flow.
 const builders = {
   anthropic: () => config.ai.anthropicKey && { model: createAnthropic({ apiKey: config.ai.anthropicKey })(config.ai.anthropicModel), name: `Claude (${config.ai.anthropicModel})` },
   groq: () => config.ai.groqKey && { model: createGroq({ apiKey: config.ai.groqKey })(config.ai.groqModel), name: `Groq (${config.ai.groqModel})` },
   google: () => config.ai.googleKey && { model: createGoogleGenerativeAI({ apiKey: config.ai.googleKey })(config.ai.googleModel), name: `Gemini (${config.ai.googleModel})` },
+  meta: () =>
+    config.ai.metaKey && {
+      model: createOpenAICompatible({ name: 'meta', baseURL: config.ai.metaBase, apiKey: config.ai.metaKey })(config.ai.metaModel),
+      name: `Meta Llama (${config.ai.metaModel})`,
+    },
 };
 
 let cached;
 export function getModel() {
   if (cached !== undefined) return cached;
-  const order = config.ai.provider && builders[config.ai.provider] ? [config.ai.provider] : ['anthropic', 'groq', 'google'];
+  const order = config.ai.provider && builders[config.ai.provider] ? [config.ai.provider] : ['anthropic', 'meta', 'groq', 'google'];
   cached = null;
   for (const id of order) {
     const m = builders[id]();
