@@ -6,7 +6,11 @@ Any small service business (cleaners, detailers, HVAC, lawn care, salons, anyone
 
 Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/). Runs on the PayPal **sandbox** only. No real money moves.
 
+**Live demo:** https://first-answer-deposits.onrender.com (free tier: the first request can take about a minute to wake the server). Pay with any PayPal sandbox personal account or a [test card](https://developer.paypal.com/tools/sandbox/card-testing/).
+
 ## Try it in two minutes
+
+All paths below are on the live demo, for example `https://first-answer-deposits.onrender.com/agent`.
 
 | What | Where |
 |---|---|
