@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Secure payment</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark" id="biz-mark">·</div><span id="biz-name">Loading…</span></div>
+    <div class="right"><span class="badge">&#128274;<span class="long"> Secure checkout with</span> PayPal</span></div>
+  </header>
+
+  <main class="wrap grid-2">
+    <section class="card" id="pay-card">
+      <div class="pay-head">
+        <div class="biz" id="pay-kind">&nbsp;</div>
+        <h1 id="pay-title">&nbsp;</h1>
+        <div class="muted" id="pay-when"></div>
+        <div style="margin-top: 10px"><span class="status" id="pay-status"></span></div>
+      </div>
+
+      <ul class="rows" id="money-rows"></ul>
+      <div class="note" id="policy-note"></div>
+
+      <div id="tip-box" class="hidden" style="margin-top: 16px">
+        <h3>Add a tip for the crew?</h3>
+        <div class="tips" id="tips"></div>
+        <p class="small muted">Optional. Tips go to the people who did the work.</p>
+      </div>
+
+      <div id="pay-area">
+        <div id="paylater-message" style="margin-top: 16px"></div>
+        <div id="paypal-buttons"></div>
+        <button class="btn primary hidden" id="demo-pay" style="width: 100%; margin-top: 14px">Pay now (demo checkout)</button>
+        <p class="small muted" style="text-align: center">No PayPal account needed. Pay with a debit or credit card, Venmo, PayPal, or Pay Later.</p>
+      </div>
+
+      <div class="done hidden" id="done">
+        <div class="check">&#10003;</div>
+        <h2 id="done-title">You're confirmed</h2>
+        <p class="muted" id="done-sub"></p>
+        <div class="cta" style="justify-content: center">
+          <a class="btn secondary" id="ics" download="appointment.ics">Add to calendar</a>
+          <a class="btn secondary" id="view-booking">View your booking</a>
+        </div>
+      </div>
+      <p class="small" id="pay-error" style="color: var(--bad)"></p>
+    </section>
+
+    <aside class="card assist" id="assist">
+      <div class="assist-head">
+        <div class="dot">AI</div>
+        <div>
+          <div style="font-weight: 700">Questions? Ask me anything</div>
+          <div class="small muted">I can explain, change your time, split the bill, or send it to someone else.</div>
+        </div>
+      </div>
+      <div class="assist-log" id="log"></div>
+      <div class="chips" id="suggest" style="margin-bottom: 10px">
+        <button class="chip" data-q="Is this refundable?">Is this refundable?</button>
+        <button class="chip" data-q="Can I pay over time?">Can I pay over time?</button>
+        <button class="chip" data-q="Someone else is paying for this">Someone else is paying</button>
+        <button class="chip" data-q="Can I split this with my roommate?">Split it</button>
+        <button class="chip" data-q="Can we change the time?">Change my time</button>
+      </div>
+      <form class="assist-form" id="ask">
+        <button type="button" class="round alt" id="mic" title="Talk instead">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+        <input id="q" placeholder="Type a question…" autocomplete="off" maxlength="500" />
+        <button class="round" type="submit" title="Send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12l16-8-6 16-2-6-8-2z"/></svg>
+        </button>
+      </form>
+    </aside>
+  </main>
+  <div class="powered" id="powered"></div>
+  <button class="ask-fab" id="ask-fab" type="button"><span class="dot">AI</span>Questions? Ask me</button>
+  <script type="module" src="/js/pay.js"></script>
+</body>
+</html>

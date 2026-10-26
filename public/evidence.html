@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Booking record</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    body { background: #fff; }
+    .doc { max-width: 820px; margin: 0 auto; padding: 32px 20px 60px; }
+    h1 { font-size: 24px; margin: 0 0 4px; }
+    h2 { font-size: 16px; margin: 28px 0 8px; border-bottom: 2px solid var(--ink); padding-bottom: 4px; }
+    pre { white-space: pre-wrap; font: inherit; }
+    @media print { .noprint { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="doc">
+    <div class="noprint" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px">
+      <span class="small muted">Everything about this booking in one file: use it for disputes, chargebacks or your records.</span>
+      <button class="btn secondary small" onclick="print()">Print or save as PDF</button>
+    </div>
+    <h1 id="title">Booking record</h1>
+    <div class="muted" id="sub"></div>
+    <h2>Terms the customer agreed to</h2><p id="terms"></p>
+    <h2>Money</h2><table class="list" id="money"></table>
+    <h2>Payments (with PayPal reference numbers)</h2><table class="list" id="payments"></table>
+    <h2>Approved changes</h2><table class="list" id="changes"></table>
+    <h2>History</h2><table class="list" id="timeline"></table>
+    <h2>Full conversation</h2><table class="list" id="convo"></table>
+  </div>
+  <script type="module">
+    import { api, money, $, escapeHtml } from '/js/common.js';
+    const id = location.pathname.split('/').pop();
+    const code = new URLSearchParams(location.search).get('code');
+    const e = await api(`/api/evidence/${id}${code ? `?code=${encodeURIComponent(code)}` : ''}`);
+    const when = (iso) => new Date(iso).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    $('#title').textContent = `${e.booking.customer} · ${e.booking.service}`;
+    $('#sub').textContent = `${e.booking.appointment} · ${e.booking.status} · Booking ${e.booking.id}`;
+    $('#terms').textContent = e.agreedTerms || 'Not recorded.';
+    const t = e.totals;
+    $('#money').innerHTML = `<tr><td>Total</td><td class="num">${money(t.total)}</td></tr><tr><td>Paid</td><td class="num">${money(t.paid)}</td></tr><tr><td>Tips</td><td class="num">${money(t.tips)}</td></tr><tr><td>Refunded</td><td class="num">${money(t.refunded)}</td></tr><tr><td><strong>Still owed</strong></td><td class="num"><strong>${money(t.due)}</strong></td></tr>`;
+    $('#payments').innerHTML = '<tr><th>When</th><th>What</th><th>Status</th><th>PayPal IDs</th><th class="num">Amount</th></tr>' + e.payments.map((p) => `<tr><td>${when(p.at)}</td><td>${escapeHtml(p.label)}</td><td>${escapeHtml(p.status)}${p.refund ? `<div class="small">refund ${money(p.refund.amount)} (${escapeHtml(p.refund.refundId)})</div>` : ''}</td><td class="small">${escapeHtml(p.paypalOrderId || '')}<br>${escapeHtml(p.paypalCaptureId || '')}</td><td class="num">${money(p.amount)}${p.tip ? ` + ${money(p.tip)}` : ''}</td></tr>`).join('');
+    $('#changes').innerHTML = e.changes.length ? '<tr><th>Change</th><th>Amount</th><th>Decision</th></tr>' + e.changes.map((c) => `<tr><td>${escapeHtml(c.description)}</td><td>${money(c.amount)}</td><td>${escapeHtml(c.status)}${c.decidedAt ? ` ${when(c.decidedAt)}` : ''}</td></tr>`).join('') : '<tr><td class="muted">None.</td></tr>';
+    $('#timeline').innerHTML = e.timeline.map((x) => `<tr><td style="white-space:nowrap">${when(x.at)}</td><td>${escapeHtml(x.text)}</td></tr>`).join('');
+    $('#convo').innerHTML = e.conversation.map((m) => `<tr><td style="white-space:nowrap">${when(m.at)}</td><td><strong>${escapeHtml(m.from)}</strong><br>${escapeHtml(m.text)}</td></tr>`).join('');
+  </script>
+</body>
+</html>

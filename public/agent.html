@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Your customer's AI books it · First Answer Deposits</title>
+  <meta name="description" content="Any AI assistant can book this business over MCP. The assistant picks the time and holds it. Only the customer can approve the PayPal deposit." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="/css/agent.css" />
+</head>
+<body>
+  <header class="topbar" style="background: transparent">
+    <a class="brand" href="/" style="color: #fff; text-decoration: none"><div class="brand-mark">F</div>First Answer Deposits</a>
+    <div class="right">
+      <a class="badge long" href="/text" style="text-decoration: none">Customer's phone</a>
+      <a class="badge" href="/owner" style="text-decoration: none">Owner's phone &rarr;</a>
+    </div>
+  </header>
+
+  <main class="agent-wrap">
+    <section class="intro">
+      <div class="eyebrow">Agent-to-agent commerce &middot; open protocol (MCP) &middot; PayPal approval</div>
+      <h1>Your customer's own AI assistant <span>books with you.</span></h1>
+      <p class="lede"><span class="cust">Sarah</span> tells <span class="poss">her</span> assistant what to book. It connects to <strong id="biz-name">the business</strong> over MCP, reads the prices, checks real open times and holds one. It can't spend a dollar: <span class="cust">Sarah</span> approves the deposit in PayPal.</p>
+      <div class="pick" id="pick" aria-label="Pick a business"></div>
+    </section>
+
+    <section class="stage">
+      <!-- Left: the customer talking to their own assistant -->
+      <div class="card chat">
+        <div class="chat-head">
+          <div class="avatar" id="avatar">A</div>
+          <div class="who">
+            <div class="name" id="assistant-name">Your assistant</div>
+            <div class="sub" id="assistant-sub">connected to the business over MCP</div>
+          </div>
+          <button class="btn ghost small" id="restart" title="Start over">Start over</button>
+        </div>
+        <div class="thread" id="thread" aria-live="polite"></div>
+        <div class="chips" id="chips"></div>
+        <form class="composer" id="composer">
+          <input id="msg" placeholder="Tell your assistant what you need…" autocomplete="off" maxlength="500" />
+          <button class="round" type="submit" title="Send" aria-label="Send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- Right: what actually goes over the wire between the two agents -->
+      <aside class="trace" id="trace-panel">
+        <div class="trace-head">
+          <div class="trace-title"><span class="dot" id="live-dot"></span>Protocol trace &middot; <span class="muted-dim">assistant &rarr; business</span></div>
+          <div class="endpoint"><span class="method">POST</span> <code id="endpoint">…</code></div>
+        </div>
+        <ol class="trace-log" id="trace">
+          <li class="trace-empty" id="trace-empty">Waiting for the first call. Every MCP tool call the assistant makes to the business shows up here: the tool, what it sent, what came back.</li>
+        </ol>
+        <div class="trace-foot">
+          <span>Agents can read this business at</span>
+          <a id="link-ucp" href="/.well-known/ucp" target="_blank" rel="noopener">/.well-known/ucp</a>
+          <a id="link-card" href="/.well-known/agent-card.json" target="_blank" rel="noopener">agent-card.json</a>
+          <a id="link-llms" href="/llms.txt" target="_blank" rel="noopener">llms.txt</a>
+        </div>
+      </aside>
+    </section>
+
+    <section class="how">
+      <div class="step"><div class="n">1</div><div><strong>The customer asks their assistant.</strong><br />Any assistant that speaks MCP: Claude, ChatGPT, a browser agent, a custom bot.</div></div>
+      <div class="step"><div class="n">2</div><div><strong>The assistant talks to the business.</strong><br />Prices, open times and a hold, over the business's own MCP endpoint. No scraping, no form filling.</div></div>
+      <div class="step"><div class="n">3</div><div><strong>The human approves the money.</strong><br />One PayPal page: PayPal, Venmo, Pay Later or card. The agent never holds a payment credential.</div></div>
+    </section>
+  </main>
+  <footer>First Answer &middot; the booking endpoint is open to any AI assistant. The money is not.</footer>
+  <script type="module" src="/js/agent.js"></script>
+</body>
+</html>

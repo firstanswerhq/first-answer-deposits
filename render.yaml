@@ -1,0 +1,28 @@
+# One-click deploy on Render (https://render.com). Set the secret values in the Render dashboard, never here.
+services:
+  - type: web
+    name: first-answer-deposits
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PUBLIC_URL
+        sync: false # https://<your-service>.onrender.com
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OWNER_PASSCODE
+        sync: false

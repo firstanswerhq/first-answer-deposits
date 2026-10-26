@@ -1,0 +1,114 @@
+/* Agent-to-agent demo page. Builds on app.css; nothing in here changes other pages. */
+body {
+  background: radial-gradient(1100px 560px at 15% -10%, #2a2f7a 0%, transparent 60%), radial-gradient(800px 400px at 100% 10%, rgba(229, 72, 157, 0.18) 0%, transparent 60%), var(--navy);
+  min-height: 100vh;
+  color: #fff;
+}
+.agent-wrap { max-width: 1180px; margin: 0 auto; padding: 8px 16px 48px; }
+
+/* ---------- intro ---------- */
+.intro { padding: 10px 0 18px; max-width: 900px; }
+.eyebrow { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: #c9cdf2; background: rgba(255, 255, 255, 0.08); padding: 6px 12px; border-radius: 999px; }
+.intro h1 { font-size: clamp(28px, 4.6vw, 44px); line-height: 1.08; letter-spacing: -0.03em; margin: 14px 0 10px; }
+.intro h1 span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lede { color: #c9cdf2; font-size: 16px; line-height: 1.55; margin: 0 0 16px; }
+.lede strong { color: #fff; }
+.pick { display: flex; gap: 8px; flex-wrap: wrap; }
+.pick button { border: 1px solid rgba(255, 255, 255, 0.25); background: transparent; color: #fff; border-radius: 999px; padding: 8px 14px; font-weight: 600; font-size: 13px; }
+.pick button.on { background: #fff; color: var(--navy); border-color: #fff; }
+
+/* ---------- stage: chat left, trace right ---------- */
+.stage { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 6fr); gap: 18px; align-items: stretch; }
+@media (max-width: 920px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+
+.chat { display: flex; flex-direction: column; min-height: 520px; height: min(760px, calc(100vh - 300px)); padding: 0; overflow: hidden; color: var(--ink); }
+.chat-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); background: #fafbfd; }
+.chat-head .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--grad); color: #fff; display: grid; place-items: center; font-weight: 800; flex-shrink: 0; }
+.chat-head .who { flex: 1; min-width: 0; }
+.chat-head .name { font-weight: 700; font-size: 15px; }
+.chat-head .sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat .thread { background: #fff; padding: 16px 14px; gap: 8px; }
+.chat .bubble { font-size: 14.5px; }
+.chat .bubble.me { background: #2f7bff; }
+.chat .chips { padding: 8px 12px 4px; border-top: 1px solid var(--line); background: #fff; }
+.chat .chips .chip { max-width: 100%; text-align: left; white-space: normal; line-height: 1.3; cursor: pointer; }
+.chat .composer { background: #fafbfd; }
+.chat .composer input { font-size: 15px; }
+.chat .composer input:focus { border-color: var(--brand-1); }
+.chat .round { background: var(--grad); }
+
+/* the one moment a human is needed */
+.approve { align-self: stretch; border: 1px solid #d8dcff; background: linear-gradient(180deg, #f6f7ff, #fff); border-radius: 16px; padding: 14px; margin-top: 4px; }
+.approve .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.approve .amount { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.approve .label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.approve .btn { display: block; width: 100%; margin-top: 10px; text-align: center; line-height: 1.3; }
+.approve .btn .pp { font-weight: 800; letter-spacing: -0.01em; }
+.approve .fine { margin: 10px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.approve .fine strong { color: var(--ink); }
+.approve.paid { border-color: #bfe8cf; background: linear-gradient(180deg, #f1fbf4, #fff); }
+.approve .status { margin-top: 2px; }
+
+/* ---------- protocol trace ---------- */
+.trace { background: #0a0d1f; border: 1px solid rgba(255, 255, 255, 0.09); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 520px; height: min(760px, calc(100vh - 300px)); overflow: hidden; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+.trace-head { padding: 14px 16px 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.03); }
+.trace-title { font-family: 'Inter', system-ui, sans-serif; font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.muted-dim { color: #8b90b8; font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #3dd68c; box-shadow: 0 0 0 0 rgba(61, 214, 140, 0.6); animation: live 1.8s infinite; }
+.dot.busy { background: #f5b83d; animation-duration: 0.8s; box-shadow: 0 0 0 0 rgba(245, 184, 61, 0.6); }
+@keyframes live { 0% { box-shadow: 0 0 0 0 rgba(61, 214, 140, 0.55); } 70% { box-shadow: 0 0 0 8px rgba(61, 214, 140, 0); } 100% { box-shadow: 0 0 0 0 rgba(61, 214, 140, 0); } }
+.endpoint { margin-top: 8px; font-size: 12px; color: #c9cdf2; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.endpoint .method { color: #7ee2a8; font-weight: 700; flex-shrink: 0; }
+.endpoint code { overflow-wrap: anywhere; word-break: break-all; color: #e9eaff; }
+
+.trace-log { list-style: none; margin: 0; padding: 10px 12px 14px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; line-height: 1.5; }
+.trace-empty { color: #8b90b8; font-family: 'Inter', system-ui, sans-serif; font-size: 13px; padding: 10px 4px; }
+.rpc { border-left: 2px solid rgba(255, 255, 255, 0.12); padding: 6px 10px 6px 12px; border-radius: 0 10px 10px 0; background: rgba(255, 255, 255, 0.025); animation: slide 0.25s ease; min-width: 0; }
+.rpc.err { border-left-color: #ff8a8a; }
+.rpc .ln { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.rpc .ln + .ln { margin-top: 2px; }
+.rpc .arrow { flex-shrink: 0; width: 14px; color: #8b90b8; }
+.rpc .tool { color: #9fb7ff; font-weight: 700; }
+.rpc .args, .rpc .res { color: #c9cdf2; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap; min-width: 0; }
+.rpc .res { color: #bfead1; }
+.rpc.err .res { color: #ffb4b4; }
+.rpc .k { color: #8b90b8; }
+.rpc .t { color: #6a6f99; font-size: 11px; margin-left: auto; flex-shrink: 0; }
+.rpc details { margin-top: 4px; }
+.rpc summary { cursor: pointer; color: #8b90b8; font-size: 11px; list-style: none; }
+.rpc summary::-webkit-details-marker { display: none; }
+.rpc summary:hover { color: #c9cdf2; }
+.rpc pre { margin: 6px 0 0; padding: 8px; background: rgba(0, 0, 0, 0.35); border-radius: 8px; overflow-x: auto; color: #d7dbff; font-size: 11.5px; max-height: 260px; }
+.sep { color: #6a6f99; font-size: 11px; text-align: center; padding: 2px 0; font-family: 'Inter', system-ui, sans-serif; }
+.trace-foot { padding: 10px 14px; border-top: 1px solid rgba(255, 255, 255, 0.08); font-family: 'Inter', system-ui, sans-serif; font-size: 12px; color: #8b90b8; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.trace-foot a { color: #c9cdf2; text-decoration: none; border-bottom: 1px dotted rgba(255, 255, 255, 0.3); overflow-wrap: anywhere; }
+.trace-foot a:hover { color: #fff; }
+@keyframes slide { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ---------- how it works ---------- */
+.how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 26px; }
+@media (max-width: 860px) { .how { grid-template-columns: 1fr; } }
+.step { display: flex; gap: 12px; color: #c9cdf2; font-size: 14px; line-height: 1.5; }
+.step strong { color: #fff; }
+.step .n { width: 28px; height: 28px; border-radius: 50%; background: var(--grad); color: #fff; font-weight: 800; display: grid; place-items: center; font-size: 13px; flex-shrink: 0; }
+footer { color: #8b90b8; }
+
+@media (max-width: 480px) {
+  .agent-wrap { padding: 4px 12px 36px; }
+  .intro { padding: 6px 0 16px; }
+  .lede { font-size: 15px; }
+  .chat, .trace { min-height: 0; max-height: none; }
+  .chat-head { padding: 12px; }
+  .chat-head .sub { white-space: normal; line-height: 1.3; }
+  .chat .thread { min-height: 300px; max-height: 420px; }
+  .trace-log { max-height: 440px; }
+  .trace-head { padding: 12px 12px 10px; }
+}
+
+/* Short laptop screens: keep the chat and the trace fully in view without scrolling. */
+@media (max-height: 820px) and (min-width: 921px) {
+  .intro { padding: 4px 0 12px; }
+  .intro h1 { font-size: 30px; margin: 10px 0 6px; }
+  .lede { font-size: 14px; margin-bottom: 10px; }
+  .chat, .trace { height: calc(100vh - 262px); min-height: 440px; }
+}

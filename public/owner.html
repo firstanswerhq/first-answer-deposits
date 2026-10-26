@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Owner · First Answer Deposits</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    .owner { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; max-width: 1280px; margin: 0 auto; padding: 24px 16px 48px; }
+    @media (max-width: 1000px) { .owner { grid-template-columns: minmax(0, 1fr); padding: 16px 12px; } .phone { max-width: 100%; } }
+    @media (max-width: 600px) { .phone-hide { display: none !important; } select.biz { max-width: 170px; } .owner .phone { height: 600px; } }
+    .owner .phone { height: 720px; }
+    .phone-chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; background: #fafbfd; border-top: 1px solid var(--line); }
+    .phone-chips .chip { white-space: nowrap; font-size: 12px; padding: 6px 10px; }
+    select.biz { border-radius: 999px; padding: 6px 12px; border: 0; font-weight: 600; color: var(--ink); background: #fff; max-width: 260px; }
+    .section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 12px; flex-wrap: wrap; }
+    .conn-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    @media (max-width: 760px) { .conn-grid { grid-template-columns: 1fr; } }
+    .conn-grid p { margin: 0 0 8px; }
+    code.url { display: block; font-size: 12px; background: var(--bg); border-radius: 8px; padding: 8px 10px; word-break: break-all; }
+    .conn-input { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; margin-top: 4px; font-size: 14px; }
+    .conn-input:focus { outline: none; border-color: var(--brand-1); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" style="color: #fff; text-decoration: none"><div class="brand-mark">F</div><span class="phone-hide">First Answer Deposits</span> <span class="muted" style="color: #9aa0d6; font-weight: 600">Owner</span></a>
+    <div class="right">
+      <select class="biz" id="biz" title="Which business"></select>
+      <span class="badge phone-hide" id="pp-badge">PayPal</span>
+      <span class="badge phone-hide" id="ai-badge">AI</span>
+      <a class="badge phone-hide" href="/text" target="_blank" style="text-decoration: none">Customer's phone &rarr;</a>
+      <button class="badge" id="seed" style="border: 0" title="Add a few sample bookings">Load a sample day</button>
+      <button class="badge" id="reset" style="border: 0">Reset demo</button>
+    </div>
+  </header>
+
+  <div class="owner">
+    <div>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="phone-screen">
+          <div class="phone-head">
+            <div class="avatar">AI</div>
+            <div class="name">Your AI office manager</div>
+            <div class="sub">Text it like you'd text a person</div>
+          </div>
+          <div class="thread" id="thread"></div>
+          <div class="phone-chips" id="chips">
+            <button class="chip" data-q="Who still owes me money?">Who owes me?</button>
+            <button class="chip" data-q="Send reminders to everyone who owes">Send reminders</button>
+            <button class="chip" data-q="How did we do this week?">How did we do?</button>
+            <button class="chip" data-q="Text past customers who are due to book again">Rebook past customers</button>
+          </div>
+          <form class="composer" id="composer">
+            <input id="msg" placeholder="Text your office manager…" autocomplete="off" maxlength="500" />
+            <button class="round" type="submit" title="Send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); min-width: 0">
+      <div class="kpis" id="kpis"></div>
+      <div class="card">
+        <div class="section-title"><h2>Bookings</h2><span class="small muted">Every booking keeps what's booked, paid and owed in one record</span></div>
+        <div style="overflow-x: auto"><table class="list" id="bookings"></table></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Live activity</h3>
+          <ul class="feed" id="feed"></ul>
+        </div>
+        <div class="card">
+          <h3>Needs you</h3>
+          <ul class="feed" id="needs"></ul>
+          <h3 style="margin-top: 16px">Waitlist</h3>
+          <ul class="feed" id="waitlist"></ul>
+        </div>
+      </div>
+      <div class="card" id="connections">
+        <div class="section-title"><h2>Connections</h2><span class="small muted">Keep the apps you already use. This plugs into them.</span></div>
+        <div class="conn-grid">
+          <div>
+            <h3>Leads in, from any app</h3>
+            <p class="small muted">Point your lead app, GoHighLevel, Zapier or a web form at this address. Every lead gets an answer in seconds and a PayPal deposit link.</p>
+            <code class="url" id="c-leadin"></code>
+            <div class="actions" style="margin-top: 8px"><button class="btn secondary small" id="c-copy-leadin">Copy</button><button class="btn secondary small" id="c-test-lead">Send a test lead</button></div>
+          </div>
+          <div>
+            <h3>Your calendar</h3>
+            <p class="small muted">Subscribe in Google, Apple or Outlook and every booking shows up by itself.</p>
+            <code class="url" id="c-cal"></code>
+            <div class="actions" style="margin-top: 8px"><button class="btn secondary small" id="c-copy-cal">Copy</button></div>
+            <label class="small muted" style="display:block; margin-top: 10px">Private iCal link of your own calendar (optional), so the AI never offers a time you're busy</label>
+            <input class="conn-input" id="c-busy" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
+          </div>
+          <div>
+            <h3>Updates out, to your CRM</h3>
+            <p class="small muted">Deposit paid, moved, refunded, paid in full: each one is posted to this address, signed.</p>
+            <input class="conn-input" id="c-webhook" placeholder="https://your-crm.example/webhook" />
+            <label class="small muted" style="display:block; margin-top: 10px">PayPal email for payouts when a job is paid</label>
+            <input class="conn-input" id="c-payout" placeholder="you@example.com" />
+            <div class="actions" style="margin-top: 10px"><button class="btn primary small" id="c-save">Save</button><span class="small muted" id="c-note"></span></div>
+          </div>
+          <div>
+            <h3>Your look</h3>
+            <p class="small muted">Your logo and color on every customer page: texts, booking page, payment page. Customers see your brand, not ours.</p>
+            <label class="small muted" style="display:block">Logo image link (optional)</label>
+            <input class="conn-input" id="c-logo" placeholder="https://your-site.com/logo.png" />
+            <label class="small muted" style="display:block; margin-top: 10px">Brand color</label>
+            <div class="actions" style="align-items: center"><input type="color" id="c-color" value="#4f5bff" style="width: 44px; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 2px" /><span class="small muted" id="c-color-hex">#4f5bff</span><span class="brand-mark" id="c-preview">·</span></div>
+            <div class="actions" style="margin-top: 10px"><button class="btn primary small" id="c-save-brand">Save look</button></div>
+          </div>
+          <div>
+            <h3>AI assistants</h3>
+            <p class="small muted">Any assistant that speaks MCP can check your times, quote and book you. The customer approves the deposit in PayPal.</p>
+            <code class="url" id="c-mcp"></code>
+            <div class="actions" style="margin-top: 8px"><button class="btn secondary small" id="c-copy-mcp">Copy</button><a class="btn secondary small" href="/agent" target="_blank">See it work</a></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/js/owner.js"></script>
+</body>
+</html>
