@@ -323,7 +323,7 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
       const r = await paypal.refundCapture(p.captureId, { amount: part < p.amount ? part : null, note: reason || 'Your payment has been refunded.' });
       refundId = r.refundId;
       refundStatus = r.status;
-    } else if (p.mode === 'cash' || p.method === 'cash' || p.method === 'check') {
+    } else if (p.mode === 'outside' || p.mode === 'cash' || p.method === 'cash' || p.method === 'check') {
       refundId = 'OUTSIDE-PAYPAL';
     }
     store.updatePayment(p.id, { refund: { amount: round2(already + part), refundId, status: refundStatus, at: new Date().toISOString() } });
@@ -512,13 +512,21 @@ export async function markCompleted(bookingId) {
   return { booking: store.getBooking(b.id), payLink: payPageUrl(payment), due: t.due };
 }
 
+const OUTSIDE_METHODS = ['cash', 'check', 'other'];
+
 export function recordOutsidePayment(bookingId, { amount, method = 'cash', note = '' }) {
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('Enter the amount they paid, like 210.');
+  const due = totals(b).due;
+  if (due <= 0) throw new Error(`${b.customerName} doesn't owe anything right now, so there is nothing to record.`);
+  method = OUTSIDE_METHODS.includes(String(method).toLowerCase()) ? String(method).toLowerCase() : 'other';
   const kind = b.status === 'held' ? 'deposit' : 'balance';
   // Void open links for the same amount so nobody gets chased for money already paid.
   b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
-  const payment = store.addPayment(b.id, { kind, amount: round2(amount), method, mode: method, label: `${method[0].toUpperCase()}${method.slice(1)} payment`, note });
+  // Never more than what is still owed. mode 'outside' keeps it out of PayPal refunds and payouts.
+  const payment = store.addPayment(b.id, { kind, amount: round2(Math.min(n, due)), method, mode: 'outside', label: `${method[0].toUpperCase()}${method.slice(1)} payment`, note });
   completePayment(payment.id, { via: method });
   return store.getBooking(b.id);
 }
@@ -610,13 +618,17 @@ export async function sendRebookNudges({ force = false } = {}) {
 // ---------------- payout to the business when the job is done ----------------
 // Customers pay the platform's PayPal account. Once a job is paid in full, the net (gross minus refunds and
 // PayPal's fees) goes to the owner's PayPal email through Payouts. In demo mode it is recorded without moving money.
+// Only money that actually came in through PayPal is paid out: cash or check recorded by the owner never is.
+const viaPayPal = (p) => p.mode === 'paypal' || (p.mode === 'demo' && !paypalReady);
 export async function payoutForBooking(bookingId) {
   const b = store.getBooking(bookingId);
   if (!b || b.payout || b.status !== 'paid_in_full') return null;
   const business = businessOf(b);
-  const t = totals(b);
-  const fees = sum(b.payments.filter((p) => p.status === 'completed').map((p) => p.fee || 0));
-  const amount = round2(t.paid + t.tips - fees);
+  const captured = b.payments.filter((p) => (p.status === 'completed' || p.status === 'refunded') && viaPayPal(p));
+  const gross = sum(captured.map((p) => Number(p.amount || 0) + Number(p.tip || 0)));
+  const refunds = sum(captured.map((p) => p.refund?.amount || 0));
+  const fees = sum(captured.map((p) => p.fee || 0));
+  const amount = round2(gross - refunds - fees);
   if (amount <= 0) return null;
   const email = business.payoutEmail || null;
   let result = { batchId: 'DEMO-PAYOUT', status: 'demo' };

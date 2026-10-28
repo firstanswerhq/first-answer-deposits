@@ -289,7 +289,7 @@ app.post('/api/owner/bookings/:id/refund', ownerOnly, ownerAction((req) => B.ref
 app.post('/api/owner/bookings/:id/done', ownerOnly, ownerAction((req) => B.markCompleted(req.params.id)));
 app.post('/api/owner/bookings/:id/cancel', ownerOnly, ownerAction((req) => B.businessCancel(req.params.id, req.body.reason || '')));
 app.post('/api/owner/bookings/:id/release', ownerOnly, ownerAction((req) => B.releaseHold(req.params.id, 'Released by the owner')));
-app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerAction((req) => B.recordOutsidePayment(req.params.id, { amount: Number(req.body.amount), method: req.body.method || 'cash' })));
+app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerAction((req) => B.recordOutsidePayment(req.params.id, { amount: Number(req.body.amount), method: String(req.body.method || 'cash') })));
 app.post('/api/owner/rebook', ownerOnly, ownerAction(() => B.sendRebookNudges({ force: true })));
 
 app.post('/api/owner/preset', ownerOnly, (req, res) => {

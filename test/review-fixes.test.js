@@ -47,3 +47,23 @@ test('customers can only cancel a held or confirmed booking (no refund after the
   const r = await B.customerCancel(d.id);
   assert.ok(['refunded', 'kept_deposit'].includes(r.outcome));
 });
+
+test('payouts count only PayPal money; cash is capped at what is owed and must be positive', async () => {
+  store.resetAll();
+  const b = await bookPaid('Cash'); // $50 deposit through (demo) PayPal
+  const total = B.totals(b).total;
+  await B.markCompleted(b.id);
+  assert.throws(() => B.recordOutsidePayment(b.id, { amount: -500, method: 'cash' }), /amount/);
+  assert.throws(() => B.recordOutsidePayment(b.id, { amount: 'abc', method: 'cash' }), /amount/);
+  assert.throws(() => B.recordOutsidePayment(b.id, { amount: 0, method: 'cash' }), /amount/);
+  const after = B.recordOutsidePayment(b.id, { amount: 1000000, method: 'paypal' });
+  const cash = after.payments.at(-1);
+  assert.equal(cash.amount, total - 50, 'capped at the balance still due');
+  assert.equal(cash.mode, 'outside');
+  assert.equal(cash.method, 'other', 'cannot pretend to be a PayPal payment');
+  assert.equal(after.status, 'paid_in_full');
+  assert.equal(B.totals(after).paid, total);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(store.getBooking(b.id).payout.amount, 50, 'only the PayPal deposit is paid out, never the cash');
+  assert.throws(() => B.recordOutsidePayment(b.id, { amount: 10 }), /doesn't owe anything/);
+});

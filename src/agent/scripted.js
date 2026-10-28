@@ -192,8 +192,8 @@ export async function scriptedOwnerReply(text) {
     if (cash) {
       b = B.findBookingsByName(cash[1])[0];
       if (b) {
-        B.recordOutsidePayment(b.id, { amount: Number(cash[2]), method: cash[3] || 'cash' });
-        return `Recorded ${B.usd(cash[2])} ${cash[3] || 'cash'} from ${b.customerName}.`;
+        const recorded = B.recordOutsidePayment(b.id, { amount: Number(cash[2]), method: cash[3] || 'cash' }).payments.at(-1);
+        return `Recorded ${B.usd(recorded.amount)} ${cash[3] || 'cash'} from ${b.customerName}.`;
       }
     }
     b = byName(/(?:done|finished)(?:\s+(?:at|with))?\s+(\w+)/);
