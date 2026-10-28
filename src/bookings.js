@@ -132,8 +132,30 @@ async function attachOrder(booking, payment, { tip = 0, redirect = true } = {}) 
     cancelUrl: `${config.publicUrl}/pay/cancel?payment=${payment.id}`,
     redirect,
   });
-  store.updatePayment(payment.id, { mode: 'paypal', orderId, paypalLink: payLink || null, orderMode: redirect ? 'redirect' : 'buttons', tip, orderCreatedAt: new Date().toISOString() });
+  // Keep every order made for this payment (with its tip) so a capture can be checked against them.
+  const orders = [...(store.findPayment(payment.id).payment.orders || []), { id: orderId, tip }].slice(-20);
+  store.updatePayment(payment.id, { mode: 'paypal', orderId, orders, paypalLink: payLink || null, orderMode: redirect ? 'redirect' : 'buttons', tip, orderCreatedAt: new Date().toISOString() });
   return payLink;
+}
+
+// True when a PayPal order ID was made by this app for this payment (the current one or an earlier one).
+export function orderBelongs(payment, orderId) {
+  if (!payment || !orderId) return false;
+  return payment.orderId === orderId || (payment.orders || []).some((o) => o.id === orderId);
+}
+
+export function findPaymentByOrder(orderId) {
+  if (!orderId) return null;
+  for (const b of store.listBookings()) {
+    const p = b.payments.find((x) => orderBelongs(x, orderId));
+    if (p) return { booking: b, payment: p };
+  }
+  return null;
+}
+
+// Tips are 0 to $500, rounded to cents. Anything else (negative, text) counts as no tip.
+export function clampTip(v) {
+  return Math.max(0, Math.min(500, Math.round(Number(v || 0) * 100) / 100)) || 0;
 }
 
 // Where the short link sends people. Makes a fresh PayPal order if the old one went stale, so links never "expire".
@@ -253,16 +275,22 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
   return store.getBooking(b.id);
 }
 
-export async function syncPayment(paymentId) {
+// orderId: the order the buyer just approved (from the PayPal buttons). It must be one this payment made;
+// without it, the payment's latest order is checked.
+export async function syncPayment(paymentId, { orderId = null } = {}) {
   const found = store.findPayment(paymentId);
   if (!found) return null;
   const { payment } = found;
-  if (payment.status !== 'pending' || payment.mode !== 'paypal' || !payment.orderId) return found.booking;
-  const order = await paypal.getOrder(payment.orderId);
+  if (orderId && !orderBelongs(payment, orderId)) throw new Error('That PayPal order is not for this payment.');
+  const useOrder = orderId || payment.orderId;
+  if (payment.status !== 'pending' || payment.mode !== 'paypal' || !useOrder) return found.booking;
+  const orderTip = (payment.orders || []).find((o) => o.id === useOrder)?.tip;
+  const tip = orderTip === undefined ? null : orderTip;
+  const order = await paypal.getOrder(useOrder);
   if (order.status === 'APPROVED') {
-    const cap = await paypal.captureOrder(payment.orderId);
+    const cap = await paypal.captureOrder(useOrder);
     if (cap.captureStatus === 'COMPLETED' || cap.status === 'COMPLETED') {
-      return completePayment(paymentId, { captureId: cap.captureId, fee: cap.fee, net: cap.net, payerEmail: cap.payerEmail, payerName: cap.payerName });
+      return completePayment(paymentId, { captureId: cap.captureId, fee: cap.fee, net: cap.net, payerEmail: cap.payerEmail, payerName: cap.payerName, tip });
     }
     if (cap.captureStatus === 'DECLINED') {
       store.updatePayment(paymentId, { lastError: 'declined' });
@@ -270,14 +298,14 @@ export async function syncPayment(paymentId) {
     }
   } else if (order.status === 'COMPLETED') {
     const cap = order?.purchase_units?.[0]?.payments?.captures?.[0];
-    return completePayment(paymentId, { captureId: cap?.id || null });
+    return completePayment(paymentId, { captureId: cap?.id || null, tip });
   }
   return store.getBooking(found.booking.id);
 }
 
 // Demo mode only (no PayPal keys): lets the flow be tried end to end.
 export function completeDemoPayment(paymentId, { tip = 0 } = {}) {
-  return completePayment(paymentId, { via: 'demo checkout', captureId: 'DEMO-' + paymentId, tip: tip || null });
+  return completePayment(paymentId, { via: 'demo checkout', captureId: 'DEMO-' + paymentId, tip: clampTip(tip) || null });
 }
 
 // ---------------- reminders ----------------
@@ -697,12 +725,12 @@ export async function handlePayPalEvent(event) {
   const type = event?.event_type || '';
   const r = event?.resource || {};
   if (type === 'CHECKOUT.ORDER.APPROVED') {
-    const found = store.findPaymentBy('orderId', r.id);
-    if (found) return syncPayment(found.payment.id);
+    const found = findPaymentByOrder(r.id);
+    if (found) return syncPayment(found.payment.id, { orderId: r.id });
   }
   if (type === 'PAYMENT.CAPTURE.COMPLETED') {
     const [, paymentId] = String(r.custom_id || '').split(':');
-    const found = store.findPayment(paymentId) || store.findPaymentBy('orderId', r?.supplementary_data?.related_ids?.order_id);
+    const found = store.findPayment(paymentId) || findPaymentByOrder(r?.supplementary_data?.related_ids?.order_id);
     if (found) {
       const br = r.seller_receivable_breakdown || {};
       return completePayment(found.payment.id, { captureId: r.id, fee: br.paypal_fee ? Number(br.paypal_fee.value) : null, net: br.net_amount ? Number(br.net_amount.value) : null });

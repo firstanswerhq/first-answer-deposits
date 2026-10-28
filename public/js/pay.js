@@ -120,9 +120,9 @@ async function setupPayment() {
           if (r.paid) throw new Error('Already paid');
           return r.orderId;
         },
-        onApprove: async () => {
+        onApprove: async (data) => {
           $('#pay-error').textContent = '';
-          const r = await api(`/api/pay/${paymentId}/capture`, { method: 'POST', body: {} });
+          const r = await api(`/api/pay/${paymentId}/capture`, { method: 'POST', body: { orderID: data?.orderID } });
           await load();
           if (r.status !== 'completed') $('#pay-error').textContent = 'PayPal is still finishing up. This page will update by itself.';
         },

@@ -83,3 +83,33 @@ test('refund amounts must be a number above zero and no more than was paid', asy
   assert.equal(rest.refunded, 30);
   assert.equal(store.getBooking(b.id).status, 'refunded');
 });
+
+test('capture only accepts an order made for this payment; demo tips are clamped to 0..500', async () => {
+  store.resetAll();
+  const lead = store.createLead({ presetId: 'cleaning' });
+  const s = B.availableSlots(B.currentBusiness(), { limit: 1 })[0];
+  const { booking } = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: 'standard', size: '3 bedrooms', slotStart: s.start, customerName: 'Ord' });
+  const pay = booking.payments[0];
+  // Pretend two PayPal orders were made for this payment (tip changed once).
+  store.updatePayment(pay.id, { mode: 'paypal', orderId: 'ORDER-2', orders: [{ id: 'ORDER-1', tip: 0 }, { id: 'ORDER-2', tip: 10 }] });
+  const p = store.findPayment(pay.id).payment;
+  assert.ok(B.orderBelongs(p, 'ORDER-1'));
+  assert.ok(B.orderBelongs(p, 'ORDER-2'));
+  assert.ok(!B.orderBelongs(p, 'SOMEONE-ELSES-ORDER'));
+  await assert.rejects(B.syncPayment(pay.id, { orderId: 'SOMEONE-ELSES-ORDER' }), /not for this payment/);
+  assert.equal(store.findPayment(pay.id).payment.status, 'pending');
+  assert.equal(B.findPaymentByOrder('ORDER-1').payment.id, pay.id);
+
+  // Demo checkout: a negative or silly tip never lands on the record.
+  assert.equal(B.clampTip(-50), 0);
+  assert.equal(B.clampTip('abc'), 0);
+  assert.equal(B.clampTip(9999), 500);
+  assert.equal(B.clampTip('12.345'), 12.35);
+  const b2 = await bookPaid('Tip', { slot: 1 });
+  await B.markCompleted(b2.id);
+  const bal = store.getBooking(b2.id).payments.find((x) => x.kind === 'balance' && x.status === 'pending');
+  B.completeDemoPayment(bal.id, { tip: -100 });
+  const done = store.getBooking(b2.id);
+  assert.equal(B.totals(done).tips, 0);
+  assert.equal(done.status, 'paid_in_full');
+});

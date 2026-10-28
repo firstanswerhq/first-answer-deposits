@@ -145,7 +145,7 @@ app.get('/api/pay/:paymentId', (req, res) => {
 });
 
 app.post('/api/pay/:paymentId/order', rateLimit(30, 10 * 60 * 1000), wrap(async (req, res) => {
-  const tip = Math.max(0, Math.min(500, Math.round(Number(req.body.tip || 0) * 100) / 100));
+  const tip = B.clampTip(req.body.tip);
   const r = await B.checkoutFor(req.params.paymentId, { tip, redirect: Boolean(req.body.redirect) });
   if (r.paid) return res.json({ paid: true });
   if (r.error) return res.status(400).json({ error: r.error });
@@ -156,10 +156,14 @@ app.post('/api/pay/:paymentId/order', rateLimit(30, 10 * 60 * 1000), wrap(async 
 app.post('/api/pay/:paymentId/capture', wrap(async (req, res) => {
   const found = store.findPayment(req.params.paymentId);
   if (!found) return res.status(404).json({ error: 'Not found' });
-  if (found.payment.mode === 'demo' || !paypalReady) {
-    B.completeDemoPayment(found.payment.id, { tip: Number(req.body.tip || 0) });
+  if (!paypalReady) {
+    // Demo checkout only exists when the host has no PayPal keys. Same 0 to $500 tip rule as the order route.
+    if (found.payment.status === 'pending') B.completeDemoPayment(found.payment.id, { tip: B.clampTip(req.body.tip) });
   } else {
-    await B.syncPayment(found.payment.id);
+    // Capture the order the buyer approved, and only if this payment made it.
+    const orderId = req.body.orderID ? String(req.body.orderID) : null;
+    if (orderId && !B.orderBelongs(found.payment, orderId)) return res.status(400).json({ error: 'That PayPal order is not for this payment.' });
+    await B.syncPayment(found.payment.id, { orderId });
   }
   const after = store.findPayment(req.params.paymentId);
   res.json({ status: after.payment.status, booking: publicBooking(after.booking) });
@@ -178,7 +182,10 @@ app.post('/api/pay/:paymentId/chat', rateLimit(40, 10 * 60 * 1000), wrap(async (
 // Redirect flow (used if the PayPal buttons can't load): PayPal sends people back here.
 app.get('/pay/return', wrap(async (req, res) => {
   const id = String(req.query.payment || '');
-  if (store.findPayment(id)) await B.syncPayment(id).catch((e) => console.error(e.message));
+  const found = store.findPayment(id);
+  // PayPal puts the approved order ID in ?token=. Use it only if it belongs to this payment.
+  const token = String(req.query.token || '');
+  if (found) await B.syncPayment(id, { orderId: B.orderBelongs(found.payment, token) ? token : null }).catch((e) => console.error(e.message));
   res.redirect(`/p/${encodeURIComponent(id)}?done=1`);
 }));
 app.get('/pay/cancel', (req, res) => res.redirect(`/p/${encodeURIComponent(String(req.query.payment || ''))}?canceled=1`));
