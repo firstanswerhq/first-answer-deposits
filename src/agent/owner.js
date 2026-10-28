@@ -7,10 +7,10 @@ import { getModel } from './model.js';
 import { scriptedOwnerReply } from './scripted.js';
 import { config } from '../config.js';
 
-function snapshot() {
+function snapshot(business) {
   const active = store
     .listBookings()
-    .filter((b) => ['held', 'confirmed', 'completed', 'needs_rebook'].includes(b.status))
+    .filter((b) => B.ownerCanTouch(b, business) && ['held', 'confirmed', 'completed', 'needs_rebook'].includes(b.status))
     .slice(0, 25)
     .map((b) => {
       const t = B.totals(b);
@@ -24,7 +24,7 @@ function systemPrompt(business) {
   return `You are the AI office manager for ${business.name}. The owner texts you short commands from their phone. Today is ${now}.
 
 ACTIVE BOOKINGS:
-${snapshot()}
+${snapshot(business)}
 
 HOW TO WORK:
 - Use the tools to do what the owner asks, then reply in 1 to 3 short sentences that say exactly what you did: names, amounts, times, and PayPal reference numbers when there are any. No markdown.
@@ -47,6 +47,12 @@ function ownerTools(business) {
       return { error: err.message };
     }
   };
+  // Every booking ID the model passes is checked: it must belong to this business or a shared demo one.
+  const mine = (id) => {
+    const b = store.getBooking(String(id || ''));
+    if (!b || !B.ownerCanTouch(b, business)) throw new Error('Booking not found.');
+    return b.id;
+  };
   const brief = (b) => {
     const t = B.totals(b);
     return { bookingId: b.id, customer: b.customerName, appointment: b.slotLabel, service: `${b.service} (${b.size})`, status: B.STATUS_WORDS[b.status], total: t.total, paid: t.paid, owed: t.due };
@@ -57,8 +63,8 @@ function ownerTools(business) {
       inputSchema: z.object({ filter: z.enum(['owes', 'held', 'confirmed', 'upcoming', 'past', 'all']).default('upcoming') }),
       execute: safe(async ({ filter }) => {
         const now = Date.now();
-        let list = store.listBookings();
-        if (filter === 'owes') list = B.owing();
+        let list = store.listBookings().filter((b) => B.ownerCanTouch(b, business));
+        if (filter === 'owes') list = B.owing().filter((b) => B.ownerCanTouch(b, business));
         else if (filter === 'held') list = list.filter((b) => b.status === 'held');
         else if (filter === 'confirmed') list = list.filter((b) => b.status === 'confirmed');
         else if (filter === 'upcoming') list = list.filter((b) => Date.parse(b.slotStart) >= now && !['canceled', 'refunded'].includes(b.status));
@@ -69,18 +75,18 @@ function ownerTools(business) {
     find_booking: tool({
       description: "Find bookings by the customer's name.",
       inputSchema: z.object({ name: z.string() }),
-      execute: safe(async ({ name }) => ({ matches: B.findBookingsByName(name).slice(0, 5).map(brief) })),
+      execute: safe(async ({ name }) => ({ matches: B.findBookingsByName(name).filter((b) => B.ownerCanTouch(b, business)).slice(0, 5).map(brief) })),
     }),
     send_reminders: tool({
       description: 'Text a payment reminder with the link. Pass bookingIds, or leave empty to remind everyone who owes.',
       inputSchema: z.object({ bookingIds: z.array(z.string()).optional() }),
       execute: safe(async ({ bookingIds }) => {
-        const ids = bookingIds && bookingIds.length ? bookingIds : B.owing().map((b) => b.id);
+        const ids = bookingIds && bookingIds.length ? bookingIds : B.owing().filter((b) => B.ownerCanTouch(b, business)).map((b) => b.id);
         const done = [];
         const skipped = [];
         for (const id of ids) {
           try {
-            const b = await B.remind(id);
+            const b = await B.remind(mine(id));
             done.push(b.customerName);
           } catch (e) {
             skipped.push(e.message);
@@ -93,7 +99,7 @@ function ownerTools(business) {
       description: 'Refund money to a customer through PayPal. Leave amount empty for a full refund.',
       inputSchema: z.object({ bookingId: z.string(), amount: z.number().positive().optional(), reason: z.string().optional() }),
       execute: safe(async ({ bookingId, amount, reason }) => {
-        const r = await B.refund(bookingId, { amount: amount || null, reason: reason || '' });
+        const r = await B.refund(mine(bookingId), { amount: amount || null, reason: reason || '' });
         return { refunded: r.refunded, reference: r.reference, status: B.STATUS_WORDS[r.booking.status] };
       }),
     }),
@@ -101,33 +107,33 @@ function ownerTools(business) {
       description: "The business can't make it. Customer is offered new times or a full refund, their choice.",
       inputSchema: z.object({ bookingId: z.string(), reason: z.string().optional() }),
       execute: safe(async ({ bookingId, reason }) => {
-        const r = await B.businessCancel(bookingId, reason || '');
+        const r = await B.businessCancel(mine(bookingId), reason || '');
         return { ok: true, offeredTimes: r.options.map((o) => o.label) };
       }),
     }),
     release_hold: tool({
       description: 'Release an unpaid hold so the time can be booked by someone else.',
       inputSchema: z.object({ bookingId: z.string() }),
-      execute: safe(async ({ bookingId }) => brief(await B.releaseHold(bookingId, 'Released by the owner'))),
+      execute: safe(async ({ bookingId }) => brief(await B.releaseHold(mine(bookingId), 'Released by the owner'))),
     }),
     mark_job_done: tool({
       description: 'Mark the job finished. Texts the customer one link for the balance with an optional tip.',
       inputSchema: z.object({ bookingId: z.string() }),
       execute: safe(async ({ bookingId }) => {
-        const r = await B.markCompleted(bookingId);
+        const r = await B.markCompleted(mine(bookingId));
         return { ok: true, balanceDue: r.due || 0, linkSent: Boolean(r.payLink) };
       }),
     }),
     record_outside_payment: tool({
       description: 'Record money paid outside PayPal (cash or check) so reminders stop.',
       inputSchema: z.object({ bookingId: z.string(), amount: z.number().positive(), method: z.enum(['cash', 'check', 'other']).default('cash') }),
-      execute: safe(async ({ bookingId, amount, method }) => brief(B.recordOutsidePayment(bookingId, { amount, method }))),
+      execute: safe(async ({ bookingId, amount, method }) => brief(B.recordOutsidePayment(mine(bookingId), { amount, method }))),
     }),
     propose_change: tool({
       description: 'Add or remove work and price. The customer gets a text to approve with YES before it counts.',
       inputSchema: z.object({ bookingId: z.string(), description: z.string(), amount: z.number().describe('positive adds, negative takes off') }),
       execute: safe(async ({ bookingId, description, amount }) => {
-        const c = B.proposeChange(bookingId, { description, amount });
+        const c = B.proposeChange(mine(bookingId), { description, amount });
         return { ok: true, change: c.description, amount: c.amount, waitingOnCustomer: true };
       }),
     }),
@@ -139,12 +145,12 @@ function ownerTools(business) {
     reschedule: tool({
       description: 'Move a booking to a new open time. Money already paid moves with it.',
       inputSchema: z.object({ bookingId: z.string(), slotStart: z.string() }),
-      execute: safe(async ({ bookingId, slotStart }) => brief(await B.reschedule(bookingId, slotStart))),
+      execute: safe(async ({ bookingId, slotStart }) => brief(await B.reschedule(mine(bookingId), slotStart))),
     }),
     mark_no_show: tool({
       description: 'Mark a customer as a no-show. The deposit is kept per the terms they agreed to.',
       inputSchema: z.object({ bookingId: z.string() }),
-      execute: safe(async ({ bookingId }) => brief(B.markNoShow(bookingId))),
+      execute: safe(async ({ bookingId }) => brief(B.markNoShow(mine(bookingId)))),
     }),
     money_summary: tool({
       description: 'Money in, PayPal fees, refunds, tips, net, and what is still owed, for the last N days.',
@@ -154,7 +160,7 @@ function ownerTools(business) {
     evidence_file: tool({
       description: 'Get the dispute evidence file for a booking: terms agreed, payments, changes, messages.',
       inputSchema: z.object({ bookingId: z.string() }),
-      execute: safe(async ({ bookingId }) => ({ link: `${config.publicUrl}/evidence/${bookingId}` })),
+      execute: safe(async ({ bookingId }) => ({ link: `${config.publicUrl}/evidence/${mine(bookingId)}` })),
     }),
     send_rebook_nudges: tool({
       description: 'Text past customers who are due to book again (repeat business).',
@@ -166,7 +172,7 @@ function ownerTools(business) {
 
 export async function ownerCommand(text) {
   const business = B.currentBusiness();
-  store.addOwnerMessage('owner', text);
+  store.addOwnerMessage('owner', text, { presetId: business.id });
   const m = getModel();
   let reply;
   if (!m) {
@@ -193,6 +199,6 @@ export async function ownerCommand(text) {
       reply = await scriptedOwnerReply(text);
     }
   }
-  store.addOwnerMessage('assistant', reply);
+  store.addOwnerMessage('assistant', reply, { presetId: business.id });
   return reply;
 }

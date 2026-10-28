@@ -33,7 +33,11 @@
     import { api, money, $, escapeHtml } from '/js/common.js';
     const id = location.pathname.split('/').pop();
     const code = new URLSearchParams(location.search).get('code');
-    const e = await api(`/api/evidence/${id}${code ? `?code=${encodeURIComponent(code)}` : ''}`);
+    let keys = [];
+    try {
+      keys = Object.values(JSON.parse(localStorage.getItem('fad-owner-keys') || '{}') || {}).filter(Boolean).slice(0, 10);
+    } catch {}
+    const e = await api(`/api/evidence/${encodeURIComponent(id)}${code ? `?code=${encodeURIComponent(code)}` : ''}`, { headers: keys.length ? { 'x-owner-key': keys.join(',') } : {} });
     const when = (iso) => new Date(iso).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
     $('#title').textContent = `${e.booking.customer} · ${e.booking.service}`;
     $('#sub').textContent = `${e.booking.appointment} · ${e.booking.status} · Booking ${e.booking.id}`;

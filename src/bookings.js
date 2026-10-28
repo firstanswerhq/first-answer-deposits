@@ -38,6 +38,12 @@ export function currentBusiness() {
 export function businessOf(x) {
   return (x && businessById(x.presetId)) || currentBusiness();
 }
+// The owner AI works on the business it is running for, plus the shared demo businesses. A business someone
+// set up at /setup is never touched from another business's owner page.
+export function ownerCanTouch(booking, current = currentBusiness()) {
+  const biz = businessOf(booking);
+  return !biz?.custom || biz.id === current?.id;
+}
 export function availableSlots(business, opts = {}) {
   return openSlots(business, store.listBookings(), { busy: cachedBusy(business), ...opts });
 }

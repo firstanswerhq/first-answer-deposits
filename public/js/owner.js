@@ -1,7 +1,25 @@
 import { api, money, linkify, listen, $, escapeHtml, clock, ask, toast } from './common.js';
 
 const code = new URLSearchParams(location.search).get('code') || '';
-const hdr = code ? { 'x-owner-passcode': code } : {};
+// Owner keys for businesses set up at /setup (?key= in the owner link). Kept in this browser, then taken out of the
+// address bar so it isn't shared by accident. Demo businesses need no key.
+const ownerKeys = (() => {
+  let keys = {};
+  try {
+    keys = JSON.parse(localStorage.getItem('fad-owner-keys') || '{}') || {};
+  } catch {}
+  const q = new URLSearchParams(location.search);
+  if (q.get('key') && q.get('biz')) {
+    keys[q.get('biz')] = q.get('key');
+    try {
+      localStorage.setItem('fad-owner-keys', JSON.stringify(keys));
+    } catch {}
+    q.delete('key');
+    history.replaceState(null, '', `${location.pathname}${q.toString() ? `?${q}` : ''}`);
+  }
+  return Object.values(keys).filter(Boolean).slice(0, 10);
+})();
+const hdr = { ...(code ? { 'x-owner-passcode': code } : {}), ...(ownerKeys.length ? { 'x-owner-key': ownerKeys.join(',') } : {}) };
 let seenOwner = 0;
 let busy = false;
 let refreshTimer = null;
@@ -102,11 +120,17 @@ async function connections() {
   pv.textContent = c.business.name[0];
   pv.style.background = c.brand.color || '';
   if (c.brand.logoUrl) pv.innerHTML = `<img src="${escapeHtml(c.brand.logoUrl)}" alt="" referrerpolicy="no-referrer" />`;
-  const ro = !c.business.custom;
+  const ro = !c.business.custom || c.locked;
   for (const id of ['c-busy', 'c-webhook', 'c-payout', 'c-logo', 'c-color']) $(`#${id}`).disabled = ro;
   $('#c-save').disabled = ro;
   $('#c-save-brand').disabled = ro;
-  $('#c-note').textContent = ro ? 'Demo businesses are read-only. Set up your own at /setup to connect apps.' : c.webhookSecret ? `Webhook signing secret: ${c.webhookSecret}` : '';
+  $('#c-note').textContent = !c.business.custom
+    ? 'Demo businesses are read-only. Set up your own at /setup to connect apps.'
+    : c.locked
+      ? 'This business belongs to its owner. Open the owner link from setup to change it.'
+      : c.webhookSecret
+        ? `Webhook signing secret: ${c.webhookSecret} (shown in full once, when the webhook address is saved)`
+        : '';
 }
 const copy = (id) => async () => {
   try {
@@ -131,13 +155,14 @@ $('#c-test-lead').addEventListener('click', async () => {
 });
 async function saveConnections() {
   try {
-    await api('/api/owner/connections', {
+    const r = await api('/api/owner/connections', {
       method: 'POST',
       headers: hdr,
       body: { busyCalendarUrl: $('#c-busy').value, webhookUrl: $('#c-webhook').value, payoutEmail: $('#c-payout').value, logoUrl: $('#c-logo').value, brandColor: $('#c-color').value },
     });
     toast('Saved.');
-    connections();
+    await connections();
+    if (r.webhookSecret) $('#c-note').textContent = `Webhook signing secret: ${r.webhookSecret}. Copy it now: it is only shown this once.`;
   } catch (err) {
     toast(err.message, 'bad');
   }
@@ -237,7 +262,11 @@ $('#bookings').addEventListener('click', async (e) => {
   refresh();
 });
 $('#biz').addEventListener('change', async (e) => {
-  await api('/api/owner/preset', { method: 'POST', body: { presetId: e.target.value }, headers: hdr });
+  try {
+    await api('/api/owner/preset', { method: 'POST', body: { presetId: e.target.value }, headers: hdr });
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
   refresh();
   connections();
 });
@@ -255,7 +284,11 @@ $('#seed').addEventListener('click', async () => {
 });
 $('#reset').addEventListener('click', async () => {
   if (!(await ask({ title: 'Start the demo over?', text: 'This clears every demo booking, message and payment.', ok: 'Clear it', danger: true }))) return;
-  await api('/api/owner/reset', { method: 'POST', headers: hdr });
+  try {
+    await api('/api/owner/reset', { method: 'POST', headers: hdr });
+  } catch (err) {
+    return toast(err.message, 'bad');
+  }
   seenOwner = 0;
   refresh();
 });
@@ -265,7 +298,7 @@ connections();
 // /owner?biz=<id> opens a specific business (used by the setup page's "owner's phone" link).
 const wantBiz = new URLSearchParams(location.search).get('biz');
 if (wantBiz && lastState && lastState.business.id !== wantBiz && lastState.presets.some((p) => p.id === wantBiz)) {
-  await api('/api/owner/preset', { method: 'POST', body: { presetId: wantBiz }, headers: hdr });
+  await api('/api/owner/preset', { method: 'POST', body: { presetId: wantBiz }, headers: hdr }).catch((err) => toast(err.message, 'bad'));
   seenOwner = 0;
   await refresh();
   connections();

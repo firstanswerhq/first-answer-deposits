@@ -14,6 +14,7 @@ import * as connect from './connect.js';
 import { seedSampleDay } from './seed.js';
 import { mountAgentic } from './agentic/index.js';
 import { checkPublicUrl } from './safe-fetch.js';
+import { newOwnerKey, hashKey, ownerKeyOk, credsFrom, resetAllowed, maskSecret } from './owner-auth.js';
 
 const app = express();
 // Render (and most hosts) sit behind one proxy: trust it so req.ip is the visitor, not the proxy, for rate limits.
@@ -59,6 +60,23 @@ const ownerOnly = (req, res, next) => {
   if (!config.ownerPasscode) return next();
   if (req.get('x-owner-passcode') === config.ownerPasscode || req.query.code === config.ownerPasscode) return next();
   res.status(401).json({ error: 'Owner passcode required.' });
+};
+// A business set up at /setup is managed only with its owner key (see owner-auth.js); demo businesses stay open.
+const denyOwner = (res) => res.status(403).json({ error: 'This business belongs to its owner. Open the owner page with the owner link from setup.' });
+const ownerOfCurrent = (req, res, next) => (ownerKeyOk(B.currentBusiness(), credsFrom(req)) ? next() : denyOwner(res));
+const ownerOfBooking = (req, res, next) => {
+  const b = store.getBooking(String(req.params.id || req.params.bookingId || ''));
+  if (!b) return res.status(404).json({ error: 'Booking not found.' });
+  return ownerKeyOk(B.businessOf(b), credsFrom(req)) ? next() : denyOwner(res);
+};
+// What the owner page may show: everything from demo businesses, and a set-up business only to its owner.
+const canSee = (req) => {
+  const creds = credsFrom(req);
+  return (x) => {
+    const presetId = x?.presetId || (x?.bookingId && store.getBooking(x.bookingId)?.presetId) || (x?.leadId && store.getLead(x.leadId)?.presetId);
+    const biz = presetId ? B.businessById(presetId) : null;
+    return !biz || ownerKeyOk(biz, creds);
+  };
 };
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => {
   console.error(err);
@@ -215,12 +233,15 @@ app.post('/api/setup/text', rateLimit(20, 10 * 60 * 1000), wrap(async (req, res)
   res.json({ profile });
 }));
 app.post('/api/setup/create', rateLimit(10, 10 * 60 * 1000), wrap(async (req, res) => {
-  const b = setup.createBusiness(req.body.profile || {});
+  // The owner key is shown once, here, inside the owner link. Only its hash is stored.
+  const ownerKey = newOwnerKey();
+  const b = setup.createBusiness(req.body.profile || {}, { ownerKeyHash: hashKey(ownerKey) });
   res.json({
     business: { id: b.id, name: b.name, trade: b.trade, city: b.city, services: b.services, deposit: b.deposit, payoutEmail: b.payoutEmail },
+    ownerKey,
     links: {
       text: `${config.publicUrl}/text?biz=${b.id}`,
-      owner: `${config.publicUrl}/owner?biz=${b.id}`,
+      owner: `${config.publicUrl}/owner?biz=${b.id}&key=${ownerKey}`,
       agent: `${config.publicUrl}/agent?biz=${b.id}`,
       mcp: `${config.publicUrl}/mcp/${b.id}`,
     },
@@ -242,19 +263,23 @@ app.get('/calendar/:bizId.ics', (req, res) => {
 });
 app.get('/api/owner/connections', ownerOnly, (req, res) => {
   const business = B.currentBusiness();
+  // A set-up business's private links and payout email are shown only to its owner. The webhook signing
+  // secret is never sent in full after it is first made (see the POST below).
+  const mine = ownerKeyOk(business, credsFrom(req));
   res.json({
     business: { id: business.id, name: business.name, custom: Boolean(business.custom) },
+    locked: !mine,
     leadInUrl: connect.leadInUrl(business),
     calendarUrl: connect.calendarUrl(business),
-    busyCalendarUrl: business.busyCalendarUrl || '',
-    webhookUrl: business.webhookUrl || '',
-    webhookSecret: business.webhookSecret || '',
-    payoutEmail: business.payoutEmail || '',
+    busyCalendarUrl: mine ? business.busyCalendarUrl || '' : '',
+    webhookUrl: mine ? business.webhookUrl || '' : '',
+    webhookSecret: mine ? maskSecret(business.webhookSecret) : '',
+    payoutEmail: mine ? business.payoutEmail || '' : '',
     brand: brandOf(business),
     mcpUrl: `${config.publicUrl}/mcp/${business.id}`,
   });
 });
-app.post('/api/owner/connections', ownerOnly, wrap(async (req, res) => {
+app.post('/api/owner/connections', ownerOnly, ownerOfCurrent, wrap(async (req, res) => {
   const business = B.currentBusiness();
   if (!business.custom) return res.status(400).json({ error: 'The demo businesses are read-only. Set up your own at /setup to connect apps.' });
   const url = (v) => (v && /^https?:\/\//.test(String(v)) ? String(v).trim().slice(0, 500) : '');
@@ -279,57 +304,71 @@ app.post('/api/owner/connections', ownerOnly, wrap(async (req, res) => {
     payoutEmail: String(req.body.payoutEmail || '').trim().slice(0, 120),
     brand: { color, logoUrl: url(req.body.logoUrl) },
   };
-  if (patch.webhookUrl && !business.webhookSecret) patch.webhookSecret = store.newId('whsec');
+  // A new webhook address gets a new signing secret, shown in full this one time.
+  const freshSecret = patch.webhookUrl && (!business.webhookSecret || patch.webhookUrl !== business.webhookUrl);
+  if (freshSecret) patch.webhookSecret = store.newId('whsec');
   store.saveBusiness({ ...business, ...patch });
-  res.json({ ok: true });
+  res.json({ ok: true, ...(freshSecret ? { webhookSecret: patch.webhookSecret } : {}) });
 }));
 
 // ---------- owner ----------
 app.get('/api/owner/state', ownerOnly, (req, res) => {
   const business = B.currentBusiness();
+  const visible = canSee(req);
   res.json({
     business: { id: business.id, name: business.name, trade: business.trade },
     presets: B.listAllBusinesses().map((p) => ({ id: p.id, name: p.name, trade: p.trade, custom: !presets[p.id] })),
     summary: B.summary(),
-    bookings: store.listBookings().slice(0, 50).map(publicBooking),
-    leads: store.listLeads().slice(0, 50).map((l) => ({ id: l.id, name: l.name, status: l.status, presetId: l.presetId, needsOwner: Boolean(l.needsOwner), lastMessage: l.messages.at(-1) || null, firstReplyMs: l.firstReplyMs })),
-    ownerThread: store.listOwnerMessages(),
-    activity: store.listActivity().slice(0, 40),
-    waitlist: store.listWaitlist().filter((w) => w.status !== 'done'),
+    bookings: store.listBookings().filter(visible).slice(0, 50).map(publicBooking),
+    leads: store.listLeads().filter(visible).slice(0, 50).map((l) => ({ id: l.id, name: l.name, status: l.status, presetId: l.presetId, needsOwner: Boolean(l.needsOwner), lastMessage: l.messages.at(-1) || null, firstReplyMs: l.firstReplyMs })),
+    ownerThread: store.listOwnerMessages().filter(visible),
+    activity: store.listActivity().filter(visible).slice(0, 40),
+    waitlist: store.listWaitlist().filter((w) => w.status !== 'done').filter(visible),
     health: { paypal: paypalReady ? config.paypal.env : 'demo mode', ai: modelLabel() },
   });
 });
 
-app.post('/api/owner/text', ownerOnly, rateLimit(40, 10 * 60 * 1000), wrap(async (req, res) => {
+app.post('/api/owner/text', ownerOnly, ownerOfCurrent, rateLimit(40, 10 * 60 * 1000), wrap(async (req, res) => {
   const text = cleanText(req.body.text);
   if (!text) return res.status(400).json({ error: 'Empty message' });
   const reply = await ownerCommand(text);
   res.json({ reply });
 }));
 
-const ownerAction = (fn) => wrap(async (req, res) => res.json({ ok: true, result: await fn(req) }));
-app.post('/api/owner/bookings/:id/remind', ownerOnly, ownerAction((req) => B.remind(req.params.id)));
-app.post('/api/owner/bookings/:id/refund', ownerOnly, ownerAction((req) => B.refund(req.params.id, { amount: req.body.amount ?? null, reason: String(req.body.reason || 'Owner refund').slice(0, 200) })));
-app.post('/api/owner/bookings/:id/done', ownerOnly, ownerAction((req) => B.markCompleted(req.params.id)));
-app.post('/api/owner/bookings/:id/cancel', ownerOnly, ownerAction((req) => B.businessCancel(req.params.id, req.body.reason || '')));
-app.post('/api/owner/bookings/:id/release', ownerOnly, ownerAction((req) => B.releaseHold(req.params.id, 'Released by the owner')));
-app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerAction((req) => B.recordOutsidePayment(req.params.id, { amount: Number(req.body.amount), method: String(req.body.method || 'cash') })));
+// Owner actions throw plain-words errors (nothing owed, bad amount...): those are the owner's to fix, so 400.
+const ownerAction = (fn) => async (req, res) => {
+  try {
+    res.json({ ok: true, result: await fn(req) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+app.post('/api/owner/bookings/:id/remind', ownerOnly, ownerOfBooking, ownerAction((req) => B.remind(req.params.id)));
+app.post('/api/owner/bookings/:id/refund', ownerOnly, ownerOfBooking, ownerAction((req) => B.refund(req.params.id, { amount: req.body.amount ?? null, reason: String(req.body.reason || 'Owner refund').slice(0, 200) })));
+app.post('/api/owner/bookings/:id/done', ownerOnly, ownerOfBooking, ownerAction((req) => B.markCompleted(req.params.id)));
+app.post('/api/owner/bookings/:id/cancel', ownerOnly, ownerOfBooking, ownerAction((req) => B.businessCancel(req.params.id, req.body.reason || '')));
+app.post('/api/owner/bookings/:id/release', ownerOnly, ownerOfBooking, ownerAction((req) => B.releaseHold(req.params.id, 'Released by the owner')));
+app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerOfBooking, ownerAction((req) => B.recordOutsidePayment(req.params.id, { amount: Number(req.body.amount), method: String(req.body.method || 'cash') })));
 app.post('/api/owner/rebook', ownerOnly, ownerAction(() => B.sendRebookNudges({ force: true })));
 
 app.post('/api/owner/preset', ownerOnly, (req, res) => {
-  if (!B.businessById(req.body.presetId)) return res.status(400).json({ error: 'Unknown business' });
+  const target = B.businessById(req.body.presetId);
+  if (!target) return res.status(400).json({ error: 'Unknown business' });
+  if (!ownerKeyOk(target, credsFrom(req))) return denyOwner(res);
   store.setPreset(req.body.presetId);
   res.json({ ok: true });
 });
-app.post('/api/owner/seed', ownerOnly, wrap(async (req, res) => res.json({ ok: true, ...(await seedSampleDay(B.currentBusiness())) })));
+app.post('/api/owner/seed', ownerOnly, ownerOfCurrent, wrap(async (req, res) => res.json({ ok: true, ...(await seedSampleDay(B.currentBusiness())) })));
 app.post('/api/owner/reset', ownerOnly, (req, res) => {
+  // Anyone can open the hosted demo, so wiping everyone's demo data is off unless the host turns it on.
+  if (!resetAllowed()) return res.status(403).json({ error: 'Starting over is turned off on this server. (The host can set ALLOW_RESET=1.)' });
   store.resetAll();
   res.json({ ok: true });
 });
 
 // Dispute evidence file (printable).
 app.get('/evidence/:bookingId', ownerOnly, (req, res) => res.sendFile(path.join(pub, 'evidence.html')));
-app.get('/api/evidence/:bookingId', ownerOnly, (req, res) => {
+app.get('/api/evidence/:bookingId', ownerOnly, ownerOfBooking, (req, res) => {
   const e = B.evidence(req.params.bookingId);
   if (!e) return res.status(404).json({ error: 'Not found' });
   res.json(e);
@@ -362,10 +401,13 @@ connect.startPushing();
 setInterval(() => B.releaseStaleHolds().catch((e) => console.error('releaseStaleHolds', e.message)), 60 * 1000).unref();
 setInterval(() => B.sendRebookNudges().catch((e) => console.error('rebook', e.message)), 60 * 60 * 1000).unref();
 
-app.listen(config.port, () => {
-  console.log(`First Answer Deposits running on ${config.publicUrl}`);
-  console.log(`PayPal: ${paypalReady ? config.paypal.env : 'demo mode (no keys)'} | AI: ${modelLabel()}`);
-  checkModel().then((s) => s.checked && console.log(`AI check: ${s.ok ? 'working' : `FAILED (${s.error})`}`));
-});
+// Tests import the app and listen on their own port (FAD_NO_LISTEN=1).
+if (process.env.FAD_NO_LISTEN !== '1') {
+  app.listen(config.port, () => {
+    console.log(`First Answer Deposits running on ${config.publicUrl}`);
+    console.log(`PayPal: ${paypalReady ? config.paypal.env : 'demo mode (no keys)'} | AI: ${modelLabel()}`);
+    checkModel().then((s) => s.checked && console.log(`AI check: ${s.ok ? 'working' : `FAILED (${s.error})`}`));
+  });
+}
 
 export default app;

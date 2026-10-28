@@ -259,7 +259,7 @@ export function cleanProfile(profile = {}) {
 }
 
 // Build the full profile and save it. Missing pieces get sensible defaults so the business works right away.
-export function createBusiness(raw) {
+export function createBusiness(raw, { ownerKeyHash = null } = {}) {
   const profile = cleanProfile(raw);
   let id = slug(profile.name);
   if (presets[id] || store.getBusiness(id)) id = `${id}-${store.newId('').slice(1, 5)}`;
@@ -285,6 +285,7 @@ export function createBusiness(raw) {
     descriptor: profile.name.replace(/[^A-Za-z0-9 ]/g, '').toUpperCase().slice(0, 22),
     payoutEmail: profile.payoutEmail || null,
     brand: { color: profile.brand?.color || '', logoUrl: profile.brand?.logoUrl || '' },
+    ...(ownerKeyHash ? { ownerKeyHash } : {}),
     createdAt: new Date().toISOString(),
   };
   store.saveBusiness(business);

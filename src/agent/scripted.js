@@ -167,20 +167,23 @@ export async function scriptedCustomerReply(lead) {
 
 export async function scriptedOwnerReply(text) {
   const t = lower(text);
+  const current = B.currentBusiness();
+  const can = (b) => B.ownerCanTouch(b, current);
+  const named = (n) => B.findBookingsByName(n).filter(can);
   const byName = (re) => {
     const m = t.match(re);
     if (!m) return null;
-    return B.findBookingsByName(m[1]).find((b) => !['canceled', 'refunded'].includes(b.status)) || B.findBookingsByName(m[1])[0] || null;
+    return named(m[1]).find((b) => !['canceled', 'refunded'].includes(b.status)) || named(m[1])[0] || null;
   };
   try {
     if (/(who|anyone).*(owe|hasn|not paid|unpaid)|owing/.test(t)) {
-      const list = B.owing();
+      const list = B.owing().filter(can);
       if (!list.length) return 'Nobody owes you anything right now.';
       return list.map((b) => `${b.customerName}: ${B.usd(b.payments.find((p) => p.status === 'pending').amount)} (${b.slotLabel})`).join('; ');
     }
     if (/remind/.test(t)) {
       const names = [];
-      for (const b of B.owing()) names.push((await B.remind(b.id)).customerName);
+      for (const b of B.owing().filter(can)) names.push((await B.remind(b.id)).customerName);
       return names.length ? `Reminders sent to ${names.join(', ')}.` : 'Nobody owes anything, so no reminders went out.';
     }
     let b = byName(/refund\s+(\w+)/);
@@ -190,7 +193,7 @@ export async function scriptedOwnerReply(text) {
     }
     const cash = t.match(/(\w+)\s+paid\s+\$?(\d+(?:\.\d+)?)\s*(cash|check)?/);
     if (cash) {
-      b = B.findBookingsByName(cash[1])[0];
+      b = named(cash[1])[0];
       if (b) {
         const recorded = B.recordOutsidePayment(b.id, { amount: Number(cash[2]), method: cash[3] || 'cash' }).payments.at(-1);
         return `Recorded ${B.usd(recorded.amount)} ${cash[3] || 'cash'} from ${b.customerName}.`;
