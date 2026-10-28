@@ -15,6 +15,8 @@ import { seedSampleDay } from './seed.js';
 import { mountAgentic } from './agentic/index.js';
 
 const app = express();
+// Render (and most hosts) sit behind one proxy: trust it so req.ip is the visitor, not the proxy, for rate limits.
+app.set('trust proxy', 1);
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 // PayPal webhooks need the raw body for signature checks, so this route comes before express.json().
