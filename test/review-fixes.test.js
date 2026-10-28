@@ -127,3 +127,40 @@ test('the booking page link is view-only: it never carries the manage key that c
   const vk = store.getBooking(b.id).viewKey;
   assert.ok(vk && vk !== b.secret && again.endsWith(`?k=${vk}`));
 });
+
+test('owner-entered links are fetched only over https and never to internal addresses', async () => {
+  const { checkPublicUrl, safeFetch, isInternalIp } = await import('../src/safe-fetch.js');
+  const dnsTable = { 'cal.example': ['93.184.216.34'], 'sneaky.example': ['93.184.216.34', '10.0.0.7'], 'rebind.example': ['127.0.0.1'] };
+  const lookup = async (host) => {
+    if (!dnsTable[host]) throw new Error('ENOTFOUND');
+    return dnsTable[host].map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
+  };
+  for (const bad of [
+    'http://cal.example/x.ics',
+    'https://localhost/x',
+    'https://127.0.0.1/x',
+    'https://10.1.2.3/x',
+    'https://192.168.1.10/x',
+    'https://172.20.0.1/x',
+    'https://169.254.169.254/latest/meta-data/',
+    'https://[::1]/x',
+    'https://[fd00::1]/x',
+    'https://[::ffff:127.0.0.1]/x',
+    'https://sneaky.example/x',
+    'https://rebind.example/x',
+    'file:///etc/passwd',
+    'not a url',
+  ]) await assert.rejects(checkPublicUrl(bad, { lookup }), Error, bad);
+  assert.equal((await checkPublicUrl('https://cal.example/private.ics', { lookup })).hostname, 'cal.example');
+  assert.ok(isInternalIp('100.64.0.1'));
+  assert.ok(!isInternalIp('8.8.8.8'));
+
+  // A redirect to an internal address is refused too.
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    calls++;
+    return { status: 302, headers: { get: (h) => (h === 'location' ? 'https://169.254.169.254/latest' : null) } };
+  };
+  await assert.rejects(safeFetch('https://cal.example/x.ics', {}, { lookup, fetchImpl }), /private or internal/);
+  assert.equal(calls, 1);
+});

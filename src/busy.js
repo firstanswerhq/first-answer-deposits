@@ -1,7 +1,9 @@
 // Busy times from a private iCal link (Google, Apple or Outlook), refreshed every 10 minutes,
 // so the AI never offers a time the owner is already busy.
+import { safeFetch } from './safe-fetch.js';
+
 const busyCache = new Map();
-let fetchImpl = (...a) => fetch(...a);
+let fetchImpl = (url, opts) => safeFetch(url, opts); // https only, never internal addresses
 export function _setFetch(fn) {
   fetchImpl = fn;
   busyCache.clear();
@@ -37,7 +39,7 @@ export async function busyTimes(business) {
   const c = busyCache.get(business.id);
   if (c && Date.now() - c.at < 10 * 60000) return c.items;
   try {
-    const res = await fetchImpl(url, { headers: { Accept: 'text/calendar' } });
+    const res = await fetchImpl(url, { headers: { Accept: 'text/calendar' }, signal: AbortSignal.timeout(8000) });
     const items = parseIcs(await res.text());
     busyCache.set(business.id, { at: Date.now(), items });
     return items;

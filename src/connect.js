@@ -7,6 +7,7 @@ import * as store from './store.js';
 import * as B from './bookings.js';
 import { config } from './config.js';
 import { replyToCustomer } from './agent/customer.js';
+import { safeFetch } from './safe-fetch.js';
 
 // ---------- leads in ----------
 export function leadInUrl(business) {
@@ -75,7 +76,7 @@ export function calendarFor(business) {
 export { busyTimes, cachedBusy, parseIcs, isBusy, _setFetch } from './busy.js';
 
 // ---------- updates out (signed webhooks to the business's CRM) ----------
-let fetchImpl = (...a) => fetch(...a);
+let fetchImpl = (url, opts) => safeFetch(url, opts); // https only, never internal addresses
 export function _setOutFetch(fn) {
   fetchImpl = fn;
 }

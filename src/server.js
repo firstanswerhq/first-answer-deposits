@@ -13,6 +13,7 @@ import * as setup from './setup.js';
 import * as connect from './connect.js';
 import { seedSampleDay } from './seed.js';
 import { mountAgentic } from './agentic/index.js';
+import { checkPublicUrl } from './safe-fetch.js';
 
 const app = express();
 // Render (and most hosts) sit behind one proxy: trust it so req.ip is the visitor, not the proxy, for rate limits.
@@ -257,10 +258,24 @@ app.post('/api/owner/connections', ownerOnly, wrap(async (req, res) => {
   const business = B.currentBusiness();
   if (!business.custom) return res.status(400).json({ error: 'The demo businesses are read-only. Set up your own at /setup to connect apps.' });
   const url = (v) => (v && /^https?:\/\//.test(String(v)) ? String(v).trim().slice(0, 500) : '');
+  // These two links are fetched by the server, so they must be https and point at the public internet.
+  const fetched = {};
+  for (const [field, label] of [['busyCalendarUrl', 'busy calendar'], ['webhookUrl', 'webhook']]) {
+    const v = String(req.body[field] || '').trim().slice(0, 500);
+    if (!v) {
+      fetched[field] = '';
+      continue;
+    }
+    try {
+      fetched[field] = (await checkPublicUrl(v)).toString();
+    } catch (err) {
+      return res.status(400).json({ error: `The ${label} link: ${err.message}` });
+    }
+  }
   const color = /^#[0-9a-f]{6}$/i.test(String(req.body.brandColor || '')) ? String(req.body.brandColor).toLowerCase() : '';
   const patch = {
-    busyCalendarUrl: url(req.body.busyCalendarUrl),
-    webhookUrl: url(req.body.webhookUrl),
+    busyCalendarUrl: fetched.busyCalendarUrl,
+    webhookUrl: fetched.webhookUrl,
     payoutEmail: String(req.body.payoutEmail || '').trim().slice(0, 120),
     brand: { color, logoUrl: url(req.body.logoUrl) },
   };
