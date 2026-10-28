@@ -351,6 +351,9 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
 export async function customerCancel(bookingId, { notify = true } = {}) {
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
+  // Only an upcoming booking can be canceled by the customer. A finished, paid or already-closed job never is.
+  if (b.status === 'needs_rebook') throw new Error(`We already canceled ${b.slotLabel} on our side, so nothing is lost: reply REFUND for all your money back, or pick a new time.`);
+  if (!['held', 'confirmed'].includes(b.status)) throw new Error(`This booking can't be canceled now (${(STATUS_WORDS[b.status] || b.status).toLowerCase()}). If something's wrong, reply here and the owner will sort it out.`);
   const t = totals(b);
   const insideWindow = Date.now() <= Date.parse(b.freeCancelUntil);
   if (t.paid <= 0) {
