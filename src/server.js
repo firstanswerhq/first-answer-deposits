@@ -285,7 +285,7 @@ app.post('/api/owner/text', ownerOnly, rateLimit(40, 10 * 60 * 1000), wrap(async
 
 const ownerAction = (fn) => wrap(async (req, res) => res.json({ ok: true, result: await fn(req) }));
 app.post('/api/owner/bookings/:id/remind', ownerOnly, ownerAction((req) => B.remind(req.params.id)));
-app.post('/api/owner/bookings/:id/refund', ownerOnly, ownerAction((req) => B.refund(req.params.id, { amount: req.body.amount || null, reason: req.body.reason || 'Owner refund' })));
+app.post('/api/owner/bookings/:id/refund', ownerOnly, ownerAction((req) => B.refund(req.params.id, { amount: req.body.amount ?? null, reason: String(req.body.reason || 'Owner refund').slice(0, 200) })));
 app.post('/api/owner/bookings/:id/done', ownerOnly, ownerAction((req) => B.markCompleted(req.params.id)));
 app.post('/api/owner/bookings/:id/cancel', ownerOnly, ownerAction((req) => B.businessCancel(req.params.id, req.body.reason || '')));
 app.post('/api/owner/bookings/:id/release', ownerOnly, ownerAction((req) => B.releaseHold(req.params.id, 'Released by the owner')));

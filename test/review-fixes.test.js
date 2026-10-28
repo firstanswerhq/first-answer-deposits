@@ -67,3 +67,19 @@ test('payouts count only PayPal money; cash is capped at what is owed and must b
   assert.equal(store.getBooking(b.id).payout.amount, 50, 'only the PayPal deposit is paid out, never the cash');
   assert.throws(() => B.recordOutsidePayment(b.id, { amount: 10 }), /doesn't owe anything/);
 });
+
+test('refund amounts must be a number above zero and no more than was paid', async () => {
+  store.resetAll();
+  const b = await bookPaid('Ref');
+  await assert.rejects(B.refund(b.id, { amount: 'abc' }), /above \$0/);
+  await assert.rejects(B.refund(b.id, { amount: NaN }), /above \$0/);
+  await assert.rejects(B.refund(b.id, { amount: 0 }), /above \$0/);
+  await assert.rejects(B.refund(b.id, { amount: -5 }), /above \$0/);
+  await assert.rejects(B.refund(b.id, { amount: 51 }), /most you can refund is \$50/);
+  assert.equal(B.totals(store.getBooking(b.id)).refunded, 0, 'nothing moved on a bad amount');
+  const part = await B.refund(b.id, { amount: '20' });
+  assert.equal(part.refunded, 20);
+  const rest = await B.refund(b.id, {});
+  assert.equal(rest.refunded, 30);
+  assert.equal(store.getBooking(b.id).status, 'refunded');
+});

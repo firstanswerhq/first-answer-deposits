@@ -307,7 +307,12 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
   if (!b) throw new Error('Booking not found.');
   const t = totals(b);
   if (t.paid <= 0) throw new Error(`${b.customerName} hasn't paid anything, so there is nothing to refund.`);
-  let toRefund = round2(amount ? Math.min(amount, t.paid) : t.paid);
+  // No amount means a full refund. Any amount given must be a real number above zero and no more than was paid.
+  const full = amount === null || amount === undefined || amount === '';
+  const asked = full ? t.paid : Number(amount);
+  if (!full && (!Number.isFinite(asked) || asked <= 0)) throw new Error('Enter a refund amount above $0, or leave it empty for a full refund.');
+  if (asked > t.paid + 0.001) throw new Error(`${b.customerName} paid ${usd(t.paid)}, so the most you can refund is ${usd(t.paid)}.`);
+  let toRefund = round2(asked);
   const refunds = [];
   // Refund newest captures first.
   for (const p of [...b.payments].reverse()) {
