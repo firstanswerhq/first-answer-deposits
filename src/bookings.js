@@ -1,6 +1,7 @@
 // The shared booking record and every money move around it.
 // Customer AI, owner AI, dashboard buttons and PayPal webhooks all go through here,
 // so the calendar and the money can never disagree.
+import crypto from 'node:crypto';
 import { presets, depositFor, priceFor } from './business.js';
 import * as store from './store.js';
 import * as paypal from './paypal.js';
@@ -105,8 +106,13 @@ export function termsLine(booking) {
   return parts.join(' ');
 }
 
+// The booking page link carries a view-only key, never the manage key (booking.secret) that can cancel or move.
+export function viewKeyOf(booking) {
+  if (!booking.viewKey) store.updateBooking(booking.id, { viewKey: crypto.randomBytes(8).toString('hex') });
+  return store.getBooking(booking.id)?.viewKey || booking.viewKey;
+}
 export function bookingPageUrl(booking) {
-  return `${config.publicUrl}/b/${booking.id}?k=${booking.secret}`;
+  return `${config.publicUrl}/b/${booking.id}?k=${viewKeyOf(booking)}`;
 }
 export function payPageUrl(payment) {
   return `${config.publicUrl}/p/${payment.id}`;

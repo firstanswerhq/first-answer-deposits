@@ -129,7 +129,8 @@ export function addMessage(leadId, role, text, extra = {}) {
 export function createBooking(data) {
   const booking = {
     id: newId('bk'),
-    secret: crypto.randomBytes(8).toString('hex'), // lets the customer open their booking page with no login
+    secret: crypto.randomBytes(8).toString('hex'), // manage key: the MCP booking_key that can move or cancel
+    viewKey: crypto.randomBytes(8).toString('hex'), // view-only key for the booking page link (safe to forward)
     status: 'held', // held | confirmed | completed | paid_in_full | canceled | refunded | no_show
     createdAt: new Date().toISOString(),
     reminders: 0,

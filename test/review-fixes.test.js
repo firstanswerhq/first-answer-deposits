@@ -113,3 +113,17 @@ test('capture only accepts an order made for this payment; demo tips are clamped
   assert.equal(B.totals(done).tips, 0);
   assert.equal(done.status, 'paid_in_full');
 });
+
+test('the booking page link is view-only: it never carries the manage key that can cancel', async () => {
+  store.resetAll();
+  const b = await bookPaid('View');
+  const url = B.bookingPageUrl(b);
+  assert.ok(b.viewKey && b.viewKey !== b.secret);
+  assert.ok(url.endsWith(`?k=${b.viewKey}`));
+  assert.ok(!url.includes(b.secret));
+  // Older bookings without a view key get one, still not the secret.
+  store.updateBooking(b.id, { viewKey: undefined });
+  const again = B.bookingPageUrl(store.getBooking(b.id));
+  const vk = store.getBooking(b.id).viewKey;
+  assert.ok(vk && vk !== b.secret && again.endsWith(`?k=${vk}`));
+});

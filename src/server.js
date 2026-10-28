@@ -194,7 +194,9 @@ app.get('/pay/cancel', (req, res) => res.redirect(`/p/${encodeURIComponent(Strin
 app.get('/b/:bookingId', (req, res) => res.sendFile(path.join(pub, 'booking.html')));
 app.get('/api/booking/:bookingId', (req, res) => {
   const b = store.getBooking(req.params.bookingId);
-  if (!b || req.query.k !== b.secret) return res.status(404).json({ error: 'Not found' });
+  // The view key opens the page; links texted before view keys existed carried the manage key, so it still works here.
+  const k = String(req.query.k || '');
+  if (!b || !k || (k !== B.viewKeyOf(b) && k !== b.secret)) return res.status(404).json({ error: 'Not found' });
   const open = b.payments.find((p) => p.status === 'pending');
   res.json({ booking: publicBooking(b), payLink: open ? B.payPageUrl(open) : null });
 });
