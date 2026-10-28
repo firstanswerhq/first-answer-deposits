@@ -164,3 +164,22 @@ test('owner-entered links are fetched only over https and never to internal addr
   await assert.rejects(safeFetch('https://cal.example/x.ics', {}, { lookup, fetchImpl }), /private or internal/);
   assert.equal(calls, 1);
 });
+
+test('setup profiles are checked on the server: plain-text names, positive prices, sane deposit', async () => {
+  const S = await import('../src/setup.js');
+  const good = { name: 'Bright Windows', trade: 'window washing', city: 'Nashville, TN', services: [{ id: 'basic', name: 'Basic wash', sizes: { standard: 90 } }], deposit: { type: 'flat', amount: 25 }, payoutEmail: 'pay@bright.example' };
+  const xss = S.createBusiness({ ...good, name: '<img src=x onerror=alert(1)>Bright', city: 'Nash<script>ville', services: [{ id: '"><svg onload=alert(1)>', name: '<b>Wash</b>', sizes: { '<i>big</i>': 120 } }] });
+  for (const v of [xss.name, xss.city, xss.services[0].name, xss.services[0].id, ...Object.keys(xss.services[0].sizes)]) assert.ok(!/[<>"]/.test(v), v);
+  assert.ok(!/[^a-z0-9-]/.test(xss.id), 'id is a plain slug');
+  assert.throws(() => S.createBusiness({ ...good, services: [{ name: 'Wash', sizes: { standard: -10 } }] }), /above \$0/);
+  assert.throws(() => S.createBusiness({ ...good, services: [{ name: 'Wash', sizes: { standard: 'free' } }] }), /above \$0/);
+  assert.throws(() => S.createBusiness({ ...good, deposit: { type: 'flat', amount: -50 } }), /deposit/);
+  assert.throws(() => S.createBusiness({ ...good, deposit: { type: 'percent', percent: 500 } }), /percent/);
+  assert.throws(() => S.createBusiness({ ...good, payoutEmail: 'not-an-email' }), /payout email/);
+  assert.throws(() => S.createBusiness({ ...good, name: 'x'.repeat(1) }), /call your business/);
+  const long = S.createBusiness({ ...good, name: 'N'.repeat(500), brand: { color: 'red;background:url(x)', logoUrl: 'javascript:alert(1)' } });
+  assert.ok(long.name.length <= 80);
+  assert.deepEqual(long.brand, { color: '', logoUrl: '' });
+  const none = S.createBusiness({ ...good, deposit: { type: 'flat', amount: 0 } });
+  assert.equal(none.deposit.amount, 0, '"no deposit" still works');
+});

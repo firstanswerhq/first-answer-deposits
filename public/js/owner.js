@@ -41,7 +41,7 @@ function bookings(list) {
           <td>${escapeHtml(b.appointment)}</td>
           <td><span class="status ${b.status}">${escapeHtml(b.statusWords)}</span></td>
           <td class="num">${money(b.totals.total)}</td><td class="num">${money(b.totals.paid)}${b.totals.tips ? `<div class="small muted">+${money(b.totals.tips)} tip</div>` : ''}</td><td class="num">${money(b.totals.due)}</td>
-          <td><div class="actions">${acts}<a class="btn ghost small" href="/evidence/${b.id}${code ? `?code=${code}` : ''}" target="_blank" title="Everything about this booking in one file">Record</a></div></td></tr>`;
+          <td><div class="actions">${acts}<a class="btn ghost small" href="/evidence/${encodeURIComponent(b.id)}${code ? `?code=${encodeURIComponent(code)}` : ''}" target="_blank" title="Everything about this booking in one file">Record</a></div></td></tr>`;
       })
       .join('');
 }
@@ -72,7 +72,7 @@ function ownerThread(msgs) {
 async function refresh() {
   const s = await api('/api/owner/state', { headers: hdr });
   lastState = s;
-  $('#biz').innerHTML = s.presets.map((p) => `<option value="${p.id}" ${p.id === s.business.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+  $('#biz').innerHTML = s.presets.map((p) => `<option value="${escapeHtml(p.id)}" ${p.id === s.business.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
   $('#pp-badge').textContent = `PayPal: ${s.health.paypal}`;
   $('#ai-badge').textContent = `AI: ${s.health.ai}`;
   kpis(s.summary);
@@ -270,4 +270,4 @@ if (wantBiz && lastState && lastState.business.id !== wantBiz && lastState.prese
   await refresh();
   connections();
 }
-listen(`/api/events?owner=1${code ? `&code=${code}` : ''}`, scheduleRefresh);
+listen(`/api/events?owner=1${code ? `&code=${encodeURIComponent(code)}` : ''}`, scheduleRefresh);

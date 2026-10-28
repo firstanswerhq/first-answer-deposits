@@ -1,4 +1,4 @@
-import { api, linkify, listen, $, speechKit, clock, applyBrand } from './common.js';
+import { api, linkify, listen, $, speechKit, clock, applyBrand, escapeHtml } from './common.js';
 import { registerWebMcpTools } from './webmcp.js';
 
 const BIZ = [
@@ -36,7 +36,7 @@ const store = {
 };
 
 function renderPick() {
-  const custom = BIZ.some((b) => b.id === presetId) ? '' : `<button data-id="${presetId}" class="on">${$('#biz').textContent || 'Your business'}</button>`;
+  const custom = BIZ.some((b) => b.id === presetId) ? '' : `<button data-id="${escapeHtml(presetId)}" class="on">${escapeHtml($('#biz').textContent || 'Your business')}</button>`;
   $('#pick').innerHTML = custom + BIZ.map((b) => `<button data-id="${b.id}" class="${b.id === presetId ? 'on' : ''}">${b.label}</button>`).join('');
 }
 
@@ -79,7 +79,7 @@ async function start(fresh = false) {
   if (wanted && !fresh) {
     store.set(key, wanted);
     params.delete('lead');
-    history.replaceState(null, '', `?biz=${presetId}`);
+    history.replaceState(null, '', `?biz=${encodeURIComponent(presetId)}`);
   }
   leadId = fresh ? null : store.get(key);
   let data = null;
@@ -208,7 +208,7 @@ $('#pick').addEventListener('click', (e) => {
   const b = e.target.closest('[data-id]');
   if (!b) return;
   presetId = b.dataset.id;
-  history.replaceState(null, '', `?biz=${presetId}`);
+  history.replaceState(null, '', `?biz=${encodeURIComponent(presetId)}`);
   renderPick();
   start();
 });

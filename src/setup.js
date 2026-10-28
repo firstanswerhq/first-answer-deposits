@@ -178,12 +178,92 @@ function slug(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'business';
 }
 
+// Plain text only: no tags, no control characters, one line, a sane length.
+function plain(v, max) {
+  return String(v ?? '')
+    .replace(/[<>\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+const positive = (v, max) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n <= max ? Math.round(n * 100) / 100 : null;
+};
+
+// The profile comes from the browser (or from a model reading free text), so every field is checked here
+// before it is saved. Throws a plain-words error the setup page can show.
+export function cleanProfile(profile = {}) {
+  const p = profile && typeof profile === 'object' ? profile : {};
+  const name = plain(p.name, 80);
+  if (name.length < 2) throw new Error('What should customers call your business?');
+  if (!Array.isArray(p.services) || !p.services.length) throw new Error('A name and at least one service are needed.');
+  if (p.services.length > 30) throw new Error('That is a lot of services. Keep it to 30 or fewer.');
+  const services = [];
+  for (const s of p.services) {
+    const sName = plain(s?.name, 60);
+    if (!sName) throw new Error('Every service needs a name.');
+    const entries = Object.entries(s?.sizes && typeof s.sizes === 'object' ? s.sizes : {}).slice(0, 12);
+    if (!entries.length) throw new Error(`"${sName}" needs a price.`);
+    const sizes = {};
+    for (const [label, price] of entries) {
+      const n = positive(price, 100000);
+      if (n === null) throw new Error(`Prices must be numbers above $0 (check "${sName}").`);
+      sizes[plain(label, 40) || 'standard'] = n;
+    }
+    let id = String(s?.id || sName).toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || `service${services.length + 1}`;
+    if (services.some((x) => x.id === id)) id = `${id}_${services.length + 1}`;
+    services.push({ id, name: sName, sizes });
+  }
+  let deposit = { type: 'flat', amount: 50 };
+  if (p.deposit && typeof p.deposit === 'object') {
+    if (p.deposit.type === 'percent') {
+      const percent = positive(p.deposit.percent, 100);
+      if (percent === null) throw new Error('A percent deposit must be above 0% and at most 100%.');
+      const minimum = p.deposit.minimum === undefined ? 20 : Number(p.deposit.minimum);
+      if (!Number.isFinite(minimum) || minimum < 0 || minimum > 100000) throw new Error('The deposit minimum must be a number.');
+      deposit = { type: 'percent', percent, minimum };
+    } else {
+      // 0 is allowed: "no deposit" is a real choice in setup.
+      const amount = Number(p.deposit.amount);
+      if (!Number.isFinite(amount) || amount < 0 || amount > 100000) throw new Error('The deposit must be a number, like $50 or 25%.');
+      deposit = { type: 'flat', amount: Math.round(amount * 100) / 100 };
+    }
+  }
+  const email = p.payoutEmail ? parseEmail(String(p.payoutEmail).slice(0, 120)) : null;
+  if (p.payoutEmail && !email) throw new Error("That payout email doesn't look right.");
+  const days = Array.isArray(p.openDays) ? [...new Set(p.openDays.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort() : [];
+  const times = Array.isArray(p.slotTimes) ? [...new Set(p.slotTimes.map(String).filter((t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)))].sort().slice(0, 12) : [];
+  let timezone = 'America/Chicago';
+  try {
+    if (p.timezone) timezone = new Intl.DateTimeFormat('en-US', { timeZone: String(p.timezone) }).resolvedOptions().timeZone;
+  } catch {
+    // unknown zone: keep the default
+  }
+  const color = /^#[0-9a-f]{6}$/i.test(String(p.brand?.color || '')) ? String(p.brand.color).toLowerCase() : '';
+  const logo = String(p.brand?.logoUrl || '').trim();
+  return {
+    name,
+    trade: plain(p.trade, 60) || 'services',
+    city: plain(p.city, 80),
+    timezone,
+    openDays: days.length ? days : [1, 2, 3, 4, 5],
+    slotTimes: times.length ? times : ['09:00', '13:00'],
+    slotMinutes: positive(p.slotMinutes, 24 * 60) || 120,
+    rebookDays: positive(p.rebookDays, 365) || 30,
+    services,
+    deposit,
+    payoutEmail: email,
+    brand: { color, logoUrl: /^https?:\/\/[^\s"'<>]+$/i.test(logo) ? logo.slice(0, 500) : '' },
+  };
+}
+
 // Build the full profile and save it. Missing pieces get sensible defaults so the business works right away.
-export function createBusiness(profile) {
-  if (!profile?.name || !profile.services?.length) throw new Error('A name and at least one service are needed.');
+export function createBusiness(raw) {
+  const profile = cleanProfile(raw);
   let id = slug(profile.name);
   if (presets[id] || store.getBusiness(id)) id = `${id}-${store.newId('').slice(1, 5)}`;
-  const services = profile.services.map((s) => ({ id: s.id, name: s.name, sizes: s.sizes }));
+  const services = profile.services;
   const multi = services.some((s) => Object.keys(s.sizes).length > 1);
   const labels = [...new Set(services.flatMap((s) => Object.keys(s.sizes)).filter((k) => k !== 'standard'))];
   const business = {
