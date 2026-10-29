@@ -60,7 +60,10 @@ test('lead to paid deposit to balance with tip to repeat business', async () => 
   assert.equal(B.totals(store.getBooking(b.id)).total, 300);
 
   // Job done -> balance link -> paid with a tip
-  const done = await ownerCommand('done at Sarah');
+  // Her appointment is still ahead, so the office manager asks before closing it out.
+  const ask = await ownerCommand('done at Sarah');
+  assert.match(ask, /hasn't happened yet.*Reply YES/);
+  const done = await ownerCommand('yes');
   assert.match(done, /250/);
   nb = store.getBooking(b.id);
   const bal = nb.payments.find((p) => p.kind === 'balance' && p.status === 'pending');

@@ -88,3 +88,51 @@ test('owner AI answers "who owes" through its tools', async () => {
   assert.match(reply, /Mike/);
   _setModelForTests(null);
 });
+
+test('owner AI: a refund the model calls "confirmed" on the first message is refused until the owner says YES', async () => {
+  store.resetAll();
+  const biz = B.businessById('cleaning');
+  const lead = store.createLead({ presetId: 'cleaning' });
+  const s = B.availableSlots(biz, { limit: 1 })[0];
+  const { booking } = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: 'standard', size: '3 bedrooms', slotStart: s.start, customerName: 'Mike' });
+  B.completeDemoPayment(booking.payments[0].id);
+  // A model that jumps straight to the money: refund with confirmed=true every time it is asked.
+  const asked = [];
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      const results = toolResults(options.prompt);
+      if (!results.length) return call('refund', { bookingId: booking.id, confirmed: true });
+      const r = results[0].value;
+      asked.push(r);
+      return text(r.askTheOwner || `Refunded $${r.refunded}. Reference ${r.reference}.`);
+    },
+  });
+  _setModelForTests({ model, name: 'mock' });
+  const first = await B.withBusiness(biz, () => ownerCommand('refund Mike'));
+  assert.equal(first, 'Refund $50 to Mike? Reply YES to send it back the way they paid, or NO.');
+  assert.equal(B.totals(store.getBooking(booking.id)).refunded, 0, 'no money moved without a YES');
+  const second = await B.withBusiness(biz, () => ownerCommand('yes'));
+  assert.match(second, /^Refunded \$50\. Reference DEMO-REFUND-/);
+  assert.equal(store.getBooking(booking.id).status, 'refunded');
+  // The owner chat history the model sees is this business's only.
+  store.addOwnerMessage('owner', 'hvac secret', { presetId: 'hvac' });
+  assert.ok(store.listOwnerMessages('cleaning').every((m) => m.presetId === 'cleaning'));
+  _setModelForTests(null);
+});
+
+test("the customer's assistant names the model it really runs on", async () => {
+  const { agentName } = await import('../src/agentic/assistant.js');
+  const fake = (provider, name) => _setModelForTests({ model: {}, name, provider });
+  fake('anthropic', 'Claude (claude-sonnet-5-5)');
+  assert.equal(agentName(), 'Claude');
+  fake('google', 'Gemini (gemini-3.5-flash-lite)');
+  assert.equal(agentName(), 'Gemini');
+  fake('meta', 'Meta Llama (Llama-4-Maverick)');
+  assert.equal(agentName(), 'Llama');
+  fake('groq', 'Groq (openai/gpt-oss-120b)');
+  assert.equal(agentName(), 'GPT-OSS (on Groq)');
+  fake('groq', 'Groq (llama-3.3-70b-versatile)');
+  assert.equal(agentName(), 'Llama (on Groq)');
+  _setModelForTests(null);
+  assert.equal(agentName(), 'Demo assistant');
+});

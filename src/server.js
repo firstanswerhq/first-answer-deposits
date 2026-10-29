@@ -336,7 +336,7 @@ app.get('/api/owner/state', ownerOnly, (req, res) => {
     resetAllowed: resetAllowed(),
     bookings: store.listBookings().filter((b) => B.businessOf(b).id === business.id).filter(visible).slice(0, 50).map(publicBooking),
     leads: store.listLeads().filter((l) => B.businessOf(l).id === business.id).filter(visible).slice(0, 50).map((l) => ({ id: l.id, name: l.name, status: l.status, presetId: l.presetId, needsOwner: Boolean(l.needsOwner), lastMessage: l.messages.at(-1) || null, firstReplyMs: l.firstReplyMs })),
-    ownerThread: store.listOwnerMessages().filter(visible),
+    ownerThread: store.listOwnerMessages(business.id).filter(visible),
     activity: store.listActivity().filter(shown).filter(visible).slice(0, 40),
     waitlist: store.listWaitlist().filter((w) => w.status !== 'done').filter(shown).filter(visible),
     health: { paypal: paypalReady ? config.paypal.env : 'demo mode', ai: modelLabel() },

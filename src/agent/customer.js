@@ -78,7 +78,7 @@ HOW TO WORK:
 - "Am I booked?", "what do I owe?", "where's my refund?": answer from the booking info above or call my_booking.
 - Reschedule with reschedule_booking (no new charge, the money moves). Cancel with cancel_booking, which applies the policy they agreed to; explain the result kindly and offer to reschedule instead if they would lose the deposit.
 - If a change is waiting for their approval and they answer, call answer_change.
-- Someone else paying: link_for_someone_else. Splitting the bill: split_payment.
+- Someone else paying: link_for_someone_else. Splitting the bill: split_payment. "Email me an invoice": email_invoice (ask for their email if you don't have it).
 - No open times that work: offer join_waitlist.
 - Anything you cannot handle (complaints, special requests, commercial jobs, questions outside this business): call hand_off_to_owner and say the owner will reply shortly.
 - Answer in the customer's language. If they write in Spanish, reply in Spanish.`;
@@ -202,6 +202,15 @@ function customerTools(lead, business, state) {
         const b = getBooking();
         if (!b) return { error: 'No booking.' };
         return B.linkForSomeoneElse(b.id, payerName);
+      }),
+    }),
+    email_invoice: tool({
+      description: 'Email the customer a PayPal invoice for the deposit that is due (another way to pay the same deposit). Needs their email address; ask for it if you do not have it.',
+      inputSchema: z.object({ email: z.string().optional().describe("the customer's email address") }),
+      execute: safe(async ({ email }) => {
+        const b = getBooking();
+        if (!b) return { error: 'No booking.' };
+        return B.emailDepositInvoice(b.id, { email: email || '' });
       }),
     }),
     join_waitlist: tool({

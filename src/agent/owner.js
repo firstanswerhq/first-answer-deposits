@@ -28,9 +28,9 @@ ${snapshot(business)}
 
 HOW TO WORK:
 - Use the tools to do what the owner asks, then reply in 1 to 3 short sentences that say exactly what you did: names, amounts, times, and PayPal reference numbers when there are any. No markdown.
-- Never invent bookings, names or numbers. If a name matches more than one booking, ask which one.
-- Refunds, cancellations and no-shows move real money: only do them when the owner clearly asks. Partial refunds are fine when the owner gives an amount.
-- "Done at Sarah's" or "finished Sarah" means mark_job_done, which texts Sarah her balance link with an optional tip.
+- Never invent bookings, names or numbers. If a name matches more than one booking (two Sarahs), list them and ask which one before doing anything.
+- Refunds and no-shows move money, so they take two steps: call the tool without confirmed to get the exact question (like "Refund $260 to Sarah Kim? Reply YES"), send that question to the owner word for word, and only after the owner replies YES call it again with confirmed: true. The tool refuses a confirmed call without that YES. Partial refunds are fine when the owner gives an amount.
+- "Done at Sarah's" or "finished Sarah" means mark_job_done, which texts Sarah her balance link with an optional tip. If her appointment hasn't happened yet, the tool asks first the same way.
 - "Sarah paid $210 cash" means record_outside_payment so nobody chases her.
 - "Add the inside of the fridge for $40" means propose_change; the customer approves by text before it counts.
 - When the owner can't make an appointment, use business_cancel: the customer picks a new time or a full refund.
@@ -52,6 +52,19 @@ function ownerTools(business) {
     const b = store.getBooking(String(id || ''));
     if (!b || !B.ownerCanTouch(b, business)) throw new Error('Booking not found.');
     return b.id;
+  };
+  // Money moves only after the owner answered YES to the exact question this tool asked (kept per business).
+  const YES = /^\s*(yes|y|yep|yeah|yup|confirm|confirmed|do it|go ahead|ok|okay|sure)\b/i;
+  const lastOwnerText = () => store.listOwnerMessages(business.id).filter((m) => m.role === 'owner').at(-1)?.text || '';
+  const confirmGate = (action, bookingId, amount, question, confirmed) => {
+    const p = store.getOwnerPending(business.id);
+    const same = p && p.kind === 'confirm' && p.action === action && p.bookingId === bookingId && (p.amount ?? null) === (amount ?? null);
+    if (confirmed && same && YES.test(lastOwnerText())) {
+      store.setOwnerPending(business.id, null);
+      return null;
+    }
+    store.setOwnerPending(business.id, { kind: 'confirm', action, bookingId, amount: amount ?? null });
+    return { needsConfirmation: true, askTheOwner: question, note: 'Nothing was done yet. Send this question to the owner and wait for YES.' };
   };
   const brief = (b) => {
     const t = B.totals(b);
@@ -97,9 +110,14 @@ function ownerTools(business) {
     }),
     refund: tool({
       description: 'Refund money to a customer through PayPal. Leave amount empty for a full refund (job money plus any tip). An amount refunds that much of the job money only; any tip stays with the crew.',
-      inputSchema: z.object({ bookingId: z.string(), amount: z.number().positive().optional(), reason: z.string().optional() }),
-      execute: safe(async ({ bookingId, amount, reason }) => {
-        const r = await B.refund(mine(bookingId), { amount: amount || null, reason: reason || '' });
+      inputSchema: z.object({ bookingId: z.string(), amount: z.number().positive().optional(), reason: z.string().optional(), confirmed: z.boolean().optional().describe('true only after the owner replied YES to the question this tool returned') }),
+      execute: safe(async ({ bookingId, amount, reason, confirmed }) => {
+        const b = store.getBooking(mine(bookingId));
+        const t = B.totals(b);
+        const sum = amount || Math.round((t.paid + t.tips) * 100) / 100;
+        const gate = confirmGate('refund', b.id, amount || null, `Refund ${B.usd(sum)}${!amount && t.tips > 0 ? ` (${B.usd(t.paid)} paid plus the ${B.usd(t.tips)} tip)` : ''} to ${b.customerName}? Reply YES to send it back the way they paid, or NO.`, confirmed);
+        if (gate) return gate;
+        const r = await B.refund(b.id, { amount: amount || null, reason: reason || '' });
         return { refunded: r.refunded, jobMoneyRefunded: r.jobRefunded, tipRefunded: r.tipRefunded, tipKept: B.totals(r.booking).tips, reference: r.reference, status: B.STATUS_WORDS[r.booking.status] };
       }),
     }),
@@ -117,10 +135,15 @@ function ownerTools(business) {
       execute: safe(async ({ bookingId }) => brief(await B.releaseHold(mine(bookingId), 'Released by the owner'))),
     }),
     mark_job_done: tool({
-      description: 'Mark the job finished. Texts the customer one link for the balance with an optional tip.',
-      inputSchema: z.object({ bookingId: z.string() }),
-      execute: safe(async ({ bookingId }) => {
-        const r = await B.markCompleted(mine(bookingId));
+      description: 'Mark the job finished. Texts the customer one link for the balance with an optional tip. If the appointment has not happened yet, it returns a question for the owner first.',
+      inputSchema: z.object({ bookingId: z.string(), confirmed: z.boolean().optional() }),
+      execute: safe(async ({ bookingId, confirmed }) => {
+        const b = store.getBooking(mine(bookingId));
+        if (Date.parse(b.slotStart) > Date.now()) {
+          const gate = confirmGate('done', b.id, null, `${b.customerName}'s appointment is ${b.slotLabel}, which hasn't happened yet. Mark it done now and text the final bill anyway? Reply YES or NO.`, confirmed);
+          if (gate) return gate;
+        }
+        const r = await B.markCompleted(b.id);
         return { ok: true, balanceDue: r.due || 0, linkSent: Boolean(r.payLink) };
       }),
     }),
@@ -149,8 +172,13 @@ function ownerTools(business) {
     }),
     mark_no_show: tool({
       description: 'Mark a customer as a no-show. The deposit is kept per the terms they agreed to.',
-      inputSchema: z.object({ bookingId: z.string() }),
-      execute: safe(async ({ bookingId }) => brief(B.markNoShow(mine(bookingId)))),
+      inputSchema: z.object({ bookingId: z.string(), confirmed: z.boolean().optional() }),
+      execute: safe(async ({ bookingId, confirmed }) => {
+        const b = store.getBooking(mine(bookingId));
+        const gate = confirmGate('no_show', b.id, null, `Mark ${b.customerName} as a no-show for ${b.slotLabel}? Per the terms they agreed to, the ${B.usd(B.totals(b).depositPaid)} deposit is kept. Reply YES or NO.`, confirmed);
+        if (gate) return gate;
+        return brief(await B.markNoShow(b.id));
+      }),
     }),
     money_summary: tool({
       description: 'Money in, PayPal fees, refunds, tips, net, and what is still owed, for the last N days.',
@@ -178,8 +206,9 @@ export async function ownerCommand(text) {
   if (!m) {
     reply = await scriptedOwnerReply(text);
   } else {
+    // This business's thread only: another business's owner chat never leaks into the prompt.
     const history = store
-      .listOwnerMessages()
+      .listOwnerMessages(business.id)
       .slice(-12)
       .map((x) => ({ role: x.role === 'owner' ? 'user' : 'assistant', content: x.text }));
     while (history.length && history[0].role !== 'user') history.shift();

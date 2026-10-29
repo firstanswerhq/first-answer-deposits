@@ -7,15 +7,25 @@ import { createMCPClient } from '@ai-sdk/mcp';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getModel } from '../agent/model.js';
+import { parseName, bareName } from '../agent/names.js';
+
+export { parseName };
 
 const sessions = new Map();
 const lower = (s) => String(s || '').toLowerCase();
 const usd = (n) => `$${Number(n).toFixed(Number(n) % 1 ? 2 : 0)}`;
 
+// The assistant's name is the model family it really runs on. Groq hosts other companies' open models, so a
+// Groq key says which one ("GPT-OSS (on Groq)"), never "Groq AI".
 export function agentName() {
   const m = getModel();
   if (!m) return 'Demo assistant';
-  return m.provider === 'anthropic' ? 'Claude' : m.provider === 'google' ? 'Gemini' : 'Groq AI';
+  if (m.provider === 'anthropic') return 'Claude';
+  if (m.provider === 'google') return 'Gemini';
+  if (m.provider === 'meta') return 'Llama';
+  const id = lower(m.name);
+  const family = /gpt-oss/.test(id) ? 'GPT-OSS' : /llama/.test(id) ? 'Llama' : /qwen/.test(id) ? 'Qwen' : /kimi/.test(id) ? 'Kimi' : /deepseek/.test(id) ? 'DeepSeek' : /gemma/.test(id) ? 'Gemma' : 'Open model';
+  return m.provider === 'groq' ? `${family} (on Groq)` : family;
 }
 
 export function getSession(id) {
@@ -62,7 +72,6 @@ async function connect(url, trace) {
 const DAY_RE = /\b(sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs?(?:day)?)?|fri(?:day)?|sat(?:urday)?)\b/;
 const DAYS = { sun: 'sunday', mon: 'monday', tue: 'tuesday', wed: 'wednesday', thu: 'thursday', fri: 'friday', sat: 'saturday' };
 const STOP = new Set(['and', 'or', 'the', 'a', 'an', 'of', 'for', 'my', 'on', 'to', 'in', 'out', 'inside', 'up', 'with', 'visit', 'new']);
-const NOT_NAMES = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'today', 'tomorrow', 'ac', 'suv', 'paypal', 'venmo', 'ok', 'okay', 'not', 'looking', 'sorry', 'good', 'fine', 'sure', 'done', 'booking', 'hoping', 'trying', 'thinking', 'ready', 'free', 'here', 'back', 'new', 'all', 'just', 'also', 'still', 'going', 'in', 'at']);
 const WORDS = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6' };
 
 const normalize = (t) =>
@@ -106,23 +115,6 @@ export function parseBudget(text) {
     t.match(/(?:under|below|max(?:imum)?|no more than|not more than|up to|budget(?: of| is)?|less than|cap(?:ped)?(?: it)? at|keep it (?:under|below|to|at)|within|at most|limit(?: of)?)\s*\$?\s*(\d+(?:\.\d+)?)/) ||
     t.match(/\$\s?(\d+(?:\.\d+)?)\s*(?:max|budget|or less|tops|limit|cap|at most)/);
   return m ? Number(m[1]) : null;
-}
-
-export function parseName(text) {
-  const t = String(text || '');
-  const pats = [
-    // "I'm Sarah Kim", "my name is Sarah", "under Sarah Kim": one or two capitalized words.
-    /\b(?:[Ii]'?m|[Ii] am|[Mm]y name is|[Mm]y name'?s|[Tt]his is|name is|[Cc]all me|it'?s|its|under(?: the name)?|for)\s+([A-Z][a-zA-Z'-]{1,30}(?:\s+[A-Z][a-zA-Z'-]{1,30})?)\b/,
-    /\b(?:my name is|my name'?s|call me|name is|i am|i'?m)\s+([a-z][a-z'-]{1,30}(?:\s+[a-z][a-z'-]{1,30})?)\b(?=\s*[.!,]?\s*$)/i,
-  ];
-  for (const p of pats) {
-    const m = t.match(p);
-    if (!m) continue;
-    const words = m[1].split(/\s+/).filter((w) => !NOT_NAMES.has(w.toLowerCase()));
-    if (!words.length || NOT_NAMES.has(words[0].toLowerCase())) continue;
-    return words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
-  }
-  return null;
 }
 
 // Which service they mean, scored by how many of its words show up. Ties are ambiguous.
@@ -287,7 +279,7 @@ async function scriptedTurn(s, text, url, trace) {
     if (when) f.when = when;
     const budget = parseBudget(text);
     if (budget) f.budget = budget;
-    const name = parseName(text) || (s.pending === 'name' && /^[A-Za-z][A-Za-z' -]{0,30}$/.test(text.trim()) ? text.trim().split(/\s+/)[0] : null);
+    const name = parseName(text) || (s.pending === 'name' ? bareName(text) : null);
     if (name) f.name = name[0].toUpperCase() + name.slice(1);
     const phone = text.match(/(\+?1[ -.]?)?\(?\d{3}\)?[ -.]?\d{3}[ -.]?\d{4}/);
     if (phone) f.phone = phone[0];

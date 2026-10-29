@@ -46,7 +46,7 @@ test('sample day with PayPal keys set: refunds work locally and payouts skip dem
   const confirmed = store.listBookings().find((b) => b.customerName === 'Marcus Lee');
   const r = await B.refund(confirmed.id, { reason: 'test', notify: false });
   assert.ok(r.refunded > 0);
-  assert.equal(r.reference, 'DEMO-REFUND');
+  assert.match(r.reference, /^DEMO-REFUND-[0-9A-F]{6}$/);
   assert.equal(store.getBooking(confirmed.id).status, 'refunded');
 
   const r2 = await B.refund(paid.id, { amount: 10, reason: 'partial', notify: false });

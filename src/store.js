@@ -16,6 +16,7 @@ const empty = () => ({
   bookings: [],
   waitlist: [],
   ownerThread: [],
+  ownerPending: {},
   activity: [],
 });
 
@@ -234,8 +235,22 @@ export function addOwnerMessage(role, text, extra = {}) {
   return msg;
 }
 
-export function listOwnerMessages() {
-  return db.ownerThread;
+export function listOwnerMessages(presetId = null) {
+  return presetId ? db.ownerThread.filter((m) => m.presetId === presetId) : db.ownerThread;
+}
+
+// A money action the owner's AI asked about ("Refund $260 to Sarah Kim? Reply YES"), per business, until answered.
+export function getOwnerPending(presetId) {
+  const p = (db.ownerPending || {})[presetId];
+  // Questions go stale after 15 minutes so an old YES never refunds anyone.
+  if (p && Date.now() - Date.parse(p.at) > 15 * 60 * 1000) return null;
+  return p || null;
+}
+export function setOwnerPending(presetId, pending) {
+  db.ownerPending = db.ownerPending || {};
+  if (pending) db.ownerPending[presetId] = { ...pending, at: new Date().toISOString() };
+  else delete db.ownerPending[presetId];
+  persist();
 }
 
 // ---------- activity log (shown on the owner screen) ----------

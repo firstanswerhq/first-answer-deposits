@@ -153,15 +153,16 @@ export async function refundCapture(captureId, { amount, currency = 'USD', note 
 }
 
 // ---------------- Invoicing: deposit by email, reminders, cancel ----------------
-export async function createAndSendDepositInvoice({ bookingId, amount, itemName, customerName, customerEmail, businessName, note, currency = 'USD' }) {
+export async function createAndSendDepositInvoice({ bookingId, requestKey = bookingId, amount, itemName, customerName, customerEmail, businessName, note, currency = 'USD' }) {
   const [given, ...rest] = String(customerName || 'Customer').trim().split(/\s+/);
   const draft = await api('/v2/invoicing/invoices', {
     method: 'POST',
-    idempotencyKey: `invoice-${bookingId}`,
+    idempotencyKey: `invoice-${requestKey}-${customerEmail}`,
     body: {
       detail: {
         currency_code: currency,
         invoice_number: `${bookingId}-${Date.now().toString().slice(-6)}`,
+        reference: bookingId,
         note: note || 'Deposit to hold your appointment. It is applied to your final bill.',
         payment_term: { term_type: 'DUE_ON_RECEIPT' },
       },

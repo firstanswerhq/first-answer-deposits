@@ -50,11 +50,11 @@ const ofBusiness = (presetId) => (b) => !presetId || businessOf(b).id === preset
 export function businessOf(x) {
   return (x && businessById(x.presetId)) || currentBusiness();
 }
-// The owner AI works on the business it is running for, plus the shared demo businesses. A business someone
-// set up at /setup is never touched from another business's owner page.
+// The owner AI works only on the business it is running for, the same one the owner page shows. A demo
+// business's office manager never touches another demo business's customers, and a business set up at /setup
+// is never touched from another business's owner page.
 export function ownerCanTouch(booking, current = currentBusiness()) {
-  const biz = businessOf(booking);
-  return !biz?.custom || biz.id === current?.id;
+  return Boolean(current) && businessOf(booking)?.id === current.id;
 }
 export function availableSlots(business, opts = {}) {
   return openSlots(business, store.listBookings(), { busy: cachedBusy(business), ...opts });
@@ -171,6 +171,15 @@ export function orderBelongs(payment, orderId) {
   return payment.orderId === orderId || (payment.orders || []).some((o) => o.id === orderId);
 }
 
+export function findPaymentByInvoice(invoiceId) {
+  if (!invoiceId) return null;
+  for (const b of store.listBookings()) {
+    const p = b.payments.find((x) => x.invoice?.id === invoiceId);
+    if (p) return { booking: b, payment: p };
+  }
+  return null;
+}
+
 export function findPaymentByOrder(orderId) {
   if (!orderId) return null;
   for (const b of store.listBookings()) {
@@ -223,6 +232,56 @@ export async function checkoutFor(paymentId, { tip = 0, redirect = false } = {})
 // so links never go stale and no unused orders pile up.
 async function newPayment(booking, data) {
   return store.addPayment(booking.id, { mode: paypalReady ? 'paypal' : 'demo', ...data });
+}
+
+// A link that can no longer take money: turned off, and any PayPal invoice for it is canceled too.
+function voidPayment(p) {
+  store.updatePayment(p.id, { status: 'void' });
+  retireInvoice(p, 'This deposit request was replaced or the booking changed, so nothing is owed on this invoice.');
+}
+function retireInvoice(p, note) {
+  const inv = p?.invoice;
+  if (!inv || inv.status !== 'sent') return;
+  store.updatePayment(p.id, { invoice: { ...inv, status: 'canceled', canceledAt: new Date().toISOString() } });
+  if (!inv.demo && paypalReady) paypal.cancelInvoice(inv.id, { note }).catch((e) => console.error('cancel invoice', e.message));
+}
+
+// "Email me an invoice": the deposit goes out as a PayPal invoice (Invoicing v2) to the customer's email, as
+// another way to pay the same deposit. Whichever is paid first counts; the other is turned off.
+export async function emailDepositInvoice(bookingId, { email = '' } = {}) {
+  const b = store.getBooking(bookingId);
+  if (!b) throw new Error('Booking not found.');
+  const pending = b.payments.find((p) => p.status === 'pending' && p.kind === 'deposit');
+  if (b.status !== 'held' || !pending) throw new Error("There's no deposit waiting on this booking, so there's nothing to invoice.");
+  const to = String(email || b.customerEmail || '').trim().slice(0, 120);
+  if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(to)) throw new Error('Sure! What email should I send the invoice to?');
+  if (pending.invoice?.status === 'sent' && pending.invoice.to === to) return { message: `The invoice is already in ${to}'s inbox. You can also pay right here: ${payPageUrl(pending)}`, invoiceId: pending.invoice.id };
+  const business = businessOf(b);
+  let invoice;
+  if (paypalReady) {
+    const r = await paypal.createAndSendDepositInvoice({
+      bookingId: b.id,
+      requestKey: pending.id,
+      amount: pending.amount,
+      itemName: `Deposit: ${b.service}${b.size === 'standard' ? '' : ` (${b.size})`}, ${b.slotLabel}`,
+      customerName: b.customerName,
+      customerEmail: to,
+      businessName: business.name,
+      note: `${termsLine(b)} Booking ${b.id}.`,
+    });
+    invoice = { id: r.invoiceId, link: r.payLink, to, status: 'sent', sentAt: new Date().toISOString() };
+  } else {
+    invoice = { id: `DEMO-INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`, link: null, to, status: 'sent', demo: true, sentAt: new Date().toISOString() };
+  }
+  retireInvoice(pending, 'A new invoice was sent.');
+  store.updatePayment(pending.id, { invoice });
+  store.updateBooking(b.id, { customerEmail: to });
+  store.addTimeline(b.id, `Deposit invoice ${invoice.id} for ${usd(pending.amount)} ${invoice.demo ? 'recorded (demo mode: no email sent)' : `sent to ${to} through PayPal Invoicing`}.`);
+  store.logActivity(`${invoice.demo ? 'Recorded a demo' : 'Sent a PayPal'} invoice for ${b.customerName}'s ${usd(pending.amount)} deposit${invoice.demo ? '' : ` to ${to}`}.`, { bookingId: b.id, kind: 'invoice' });
+  const message = invoice.demo
+    ? `Done: invoice ${invoice.id} for the ${usd(pending.amount)} deposit is recorded for ${to}. (This demo server has no PayPal keys, so no email actually goes out; with keys, PayPal emails it.) You can also pay right here: ${payPageUrl(pending)}`
+    : `Sent! PayPal just emailed a ${usd(pending.amount)} deposit invoice to ${to}. Pay it there or right here, whichever is easier: ${payPageUrl(pending)}`;
+  return { message, invoiceId: invoice.id };
 }
 
 // ---------------- booking ----------------
@@ -284,6 +343,7 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
     via,
     ...(tip !== null ? { tip } : {}),
   });
+  if (payment.invoice && via !== 'PayPal invoice') retireInvoice(payment, 'This deposit was paid another way, so the invoice is no longer needed.');
   const b = store.getBooking(booking.id);
   const t = totals(b);
   const p = store.findPayment(paymentId).payment;
@@ -370,6 +430,8 @@ export async function remind(bookingId) {
       ? `Quick reminder: ${b.slotLabel} is held for you. Tap to pay the ${usd(pending.amount)} deposit and lock it in (card, Venmo, Pay Later or PayPal): ${payPageUrl(pending)}`
       : `Friendly reminder: ${usd(pending.amount)} is still open for your ${b.service} on ${b.slotLabel}. Pay here: ${payPageUrl(pending)}`;
   store.addMessage(b.leadId, 'assistant', text, { kind: 'reminder' });
+  // A deposit that also went out as a PayPal invoice gets PayPal's own reminder email too.
+  if (pending.invoice?.status === 'sent' && !pending.invoice.demo && paypalReady) await paypal.remindInvoice(pending.invoice.id, { note: text }).catch((e) => console.error('invoice reminder', e.message));
   store.updateBooking(bookingId, { reminders: (b.reminders || 0) + 1, lastReminderAt: new Date().toISOString() });
   store.addTimeline(b.id, `Reminder sent for ${usd(pending.amount)}.`);
   store.logActivity(`Reminder sent to ${b.customerName} for ${usd(pending.amount)}.`, { bookingId, kind: 'reminder' });
@@ -395,6 +457,8 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
   if (asked > t.paid + 0.001) throw new Error(`${b.customerName} paid ${usd(t.paid)} toward the job, so the most you can refund is ${usd(t.paid)}${t.tips > 0 ? ` (a full refund also returns the ${usd(t.tips)} tip)` : ''}.`);
   let toRefund = round2(asked);
   const refunds = [];
+  // Demo money gets one reference for the whole refund, like a single PayPal refund would.
+  const demoRef = `DEMO-REFUND-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   // Refund newest captures first.
   for (const p of [...b.payments].reverse()) {
     if (p.status !== 'completed' || p.kind === 'tip') continue;
@@ -405,10 +469,10 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
     const tipPart = full ? round2((p.tip || 0) - tipAlready) : 0;
     if (part <= 0 && tipPart <= 0) continue;
     const back = round2(part + tipPart);
-    let refundId = 'DEMO-REFUND';
+    let refundId = demoRef;
     let refundStatus = 'COMPLETED';
     if (isDemoMoney(p)) {
-      refundId = 'DEMO-REFUND';
+      refundId = demoRef;
     } else if (p.mode === 'paypal' && p.captureId && paypalReady) {
       // The capture holds the amount plus the tip. Refund the whole capture only when all of it goes back.
       const whole = already === 0 && tipAlready === 0 && back + 0.001 >= round2(p.amount + (p.tip || 0));
@@ -428,7 +492,8 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
   const after = totals(store.getBooking(b.id));
   const fullyRefunded = after.paid <= 0.001;
   store.updateBooking(b.id, { status: fullyRefunded ? newStatus : b.status, refundedAt: new Date().toISOString(), refundReason: reason });
-  const ref = refunds.map((r) => r.refundId).join(', ');
+  // One line per distinct reference: two demo payments refunded together never print "X, X".
+  const ref = [...new Set(refunds.map((r) => r.refundId))].join(', ');
   // What went back, in plain words: "$114 plus the $500 tip ($614 in all)" or "$50 of the $114 paid; the $20 tip was not refunded".
   const what = tipBack > 0 ? `${usd(jobBack)} plus the ${usd(tipBack)} tip (${usd(total)} in all)` : !full && t.paid - jobBack > 0.001 ? `${usd(jobBack)} of the ${usd(t.paid)} paid` : usd(total);
   const tipNote = !full && t.tips > 0 ? ` The ${usd(t.tips)} tip was not refunded.` : '';
@@ -457,7 +522,7 @@ export async function customerCancel(bookingId, { notify = true } = {}) {
   if (t.paid <= 0) {
     store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString() });
     // Turn off the deposit link too, so a canceled booking can't be paid for later.
-    b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+    b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
     store.addTimeline(b.id, 'Customer canceled before paying. Hold released and the payment link turned off.');
     store.logActivity(`${b.customerName} canceled ${b.slotLabel} (nothing was paid).`, { bookingId: b.id, kind: 'cancel' });
     await offerToWaitlist(b.presetId, b.slotStart, b.slotLabel);
@@ -486,7 +551,7 @@ export async function businessCancel(bookingId, reason = '') {
   store.updateBooking(b.id, { status: 'needs_rebook', businessCanceledAt: new Date().toISOString(), businessCancelReason: reason });
   const paid = totals(b).paid;
   // Nothing paid yet: turn the deposit link off, so nobody pays for a time we canceled. Picking a new time sends a fresh one.
-  if (paid <= 0) b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+  if (paid <= 0) b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
   const list = options.map((s, i) => `${i + 1}) ${s.label}`).join('  ');
   store.addMessage(
     b.leadId,
@@ -513,7 +578,7 @@ export async function acceptBusinessCancel(bookingId, { notify = true } = {}) {
     return { outcome: 'refunded_in_full', ...r };
   }
   store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), cancelReason: 'Business canceled; customer chose not to rebook' });
-  b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+  b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
   store.addTimeline(b.id, 'Customer chose not to rebook after the business canceled. Nothing was paid, so nothing to refund. Booking closed.');
   store.logActivity(`${b.customerName} closed out the time you canceled (nothing was paid).`, { bookingId: b.id, kind: 'cancel' });
   return { outcome: 'released', refunded: 0, reference: null, booking: store.getBooking(b.id) };
@@ -524,7 +589,7 @@ export async function releaseHold(bookingId, reason = 'Deposit not paid in time'
   if (!b) throw new Error('Booking not found.');
   if (b.status !== 'held') throw new Error(`${b.customerName}'s booking is ${STATUS_WORDS[b.status] || b.status}, not an unpaid hold.`);
   store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), cancelReason: reason });
-  b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+  b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
   store.addMessage(b.leadId, 'assistant', `We released the hold on ${b.slotLabel} since the deposit didn't come through. Text us anytime and we'll find you a new time.`, { kind: 'released' });
   store.addTimeline(b.id, `Hold released: ${reason}.`);
   store.logActivity(`Released ${b.customerName}'s unpaid hold on ${b.slotLabel}.`, { bookingId: b.id, kind: 'release' });
@@ -543,6 +608,7 @@ export async function releaseStaleHolds(maxMinutes = Number(process.env.HOLD_MIN
 export function markNoShow(bookingId) {
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
+  if (!['confirmed', 'held'].includes(b.status)) throw new Error(`${b.customerName}'s booking is ${(STATUS_WORDS[b.status] || b.status).toLowerCase()}, so it can't be marked a no-show.`);
   const kept = totals(b).depositPaid;
   store.updateBooking(b.id, { status: 'no_show', noShowAt: new Date().toISOString(), depositKept: kept });
   store.addTimeline(b.id, `Marked no-show. Deposit of ${usd(kept)} kept per the terms shown at booking.`);
@@ -655,7 +721,7 @@ export function recordOutsidePayment(bookingId, { amount, method = 'cash', note 
   method = OUTSIDE_METHODS.includes(String(method).toLowerCase()) ? String(method).toLowerCase() : 'other';
   const kind = b.status === 'held' ? 'deposit' : 'balance';
   // Void open links for the same amount so nobody gets chased for money already paid.
-  b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+  b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
   // Never more than what is still owed. mode 'outside' keeps it out of PayPal refunds and payouts.
   const payment = store.addPayment(b.id, { kind, amount: round2(Math.min(n, due)), method, mode: 'outside', label: `${method[0].toUpperCase()}${method.slice(1)} payment`, note });
   completePayment(payment.id, { via: method });
@@ -672,7 +738,7 @@ export async function splitDue(bookingId, ways = 2) {
   const kind = b.status === 'held' ? 'deposit' : 'balance';
   const amountDue = kind === 'deposit' ? round2(b.deposit - t.depositPaid) : t.due;
   if (amountDue <= 0) throw new Error('Nothing is due right now.');
-  open.forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+  open.forEach(voidPayment);
   const share = Math.floor((amountDue / ways) * 100) / 100;
   const links = [];
   for (let i = 0; i < ways; i++) {
@@ -852,6 +918,13 @@ export async function handlePayPalEvent(event) {
     const [, paymentId] = String(r.custom_id || '').split(':');
     const found = store.findPayment(paymentId);
     if (found) store.addMessage(found.booking.leadId, 'assistant', `That payment didn't go through, and nothing was charged. Here's a fresh link: ${payPageUrl(found.payment)}`, { kind: 'payment_failed' });
+  }
+  if (type === 'INVOICING.INVOICE.PAID') {
+    // Payload shapes differ between docs versions: the invoice at resource or at resource.invoice.
+    const inv = r.invoice || r;
+    const found = store.findPaymentBy('invoiceId', inv.id) || findPaymentByInvoice(inv.id);
+    const txn = inv?.payments?.transactions?.[0] || inv?.payments?.[0] || null;
+    if (found) return completePayment(found.payment.id, { captureId: txn?.payment_id || null, via: 'PayPal invoice' });
   }
   if (type === 'CUSTOMER.DISPUTE.CREATED') {
     const txn = r?.disputed_transactions?.[0];
