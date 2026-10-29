@@ -5,6 +5,7 @@ import * as store from '../store.js';
 import * as B from '../bookings.js';
 import { getModel } from './model.js';
 import { scriptedOwnerReply } from './scripted.js';
+import { questionFor, ask, recheck, ownerSaidYesAfter } from './confirm.js';
 import { config } from '../config.js';
 
 function snapshot(business) {
@@ -53,18 +54,22 @@ function ownerTools(business) {
     if (!b || !B.ownerCanTouch(b, business)) throw new Error('Booking not found.');
     return b.id;
   };
-  // Money moves only after the owner answered YES to the exact question this tool asked (kept per business).
-  const YES = /^\s*(yes|y|yep|yeah|yup|confirm|confirmed|do it|go ahead|ok|okay|sure)\b/i;
-  const lastOwnerText = () => store.listOwnerMessages(business.id).filter((m) => m.role === 'owner').at(-1)?.text || '';
-  const confirmGate = (action, bookingId, amount, question, confirmed) => {
+  // Money moves only after the owner answered YES to the exact question this tool asked (kept per business):
+  // the YES must be its own owner message, sent after the question, and the booking must not have changed since.
+  // A model that asks and then calls again with confirmed:true in the same turn is refused.
+  const confirmGate = (action, b, amount, confirmed) => {
     const p = store.getOwnerPending(business.id);
-    const same = p && p.kind === 'confirm' && p.action === action && p.bookingId === bookingId && (p.amount ?? null) === (amount ?? null);
-    if (confirmed && same && YES.test(lastOwnerText())) {
+    const same = p && p.kind === 'confirm' && p.action === action && p.bookingId === b.id && (p.amount ?? null) === (amount ?? null);
+    if (confirmed && same && ownerSaidYesAfter(business.id, p)) {
+      const r = recheck(business.id, p, b);
+      if (!r.go) return { needsConfirmation: true, askTheOwner: r.question, note: 'The booking changed since the owner was asked, so nothing was done. Send this new question word for word and wait for YES.' };
       store.setOwnerPending(business.id, null);
       return null;
     }
-    store.setOwnerPending(business.id, { kind: 'confirm', action, bookingId, amount: amount ?? null });
-    return { needsConfirmation: true, askTheOwner: question, note: 'Nothing was done yet. Send this question to the owner and wait for YES.' };
+    const q = questionFor(action, b, amount);
+    if (!q) return null;
+    const text = ask(business.id, action, b, amount, q);
+    return { needsConfirmation: true, askTheOwner: text, note: confirmed ? 'Refused: the owner has not replied YES to this question yet. Nothing was done. Send this question word for word and wait for their reply.' : 'Nothing was done yet. Send this question to the owner word for word and wait for YES.' };
   };
   const brief = (b) => {
     const t = B.totals(b);
@@ -113,9 +118,7 @@ function ownerTools(business) {
       inputSchema: z.object({ bookingId: z.string(), amount: z.number().positive().optional(), reason: z.string().optional(), confirmed: z.boolean().optional().describe('true only after the owner replied YES to the question this tool returned') }),
       execute: safe(async ({ bookingId, amount, reason, confirmed }) => {
         const b = store.getBooking(mine(bookingId));
-        const t = B.totals(b);
-        const sum = amount || Math.round((t.paid + t.tips) * 100) / 100;
-        const gate = confirmGate('refund', b.id, amount || null, `Refund ${B.usd(sum)}${!amount && t.tips > 0 ? ` (${B.usd(t.paid)} paid plus the ${B.usd(t.tips)} tip)` : ''} to ${b.customerName}? Reply YES to send it back the way they paid, or NO.`, confirmed);
+        const gate = confirmGate('refund', b, amount || null, confirmed);
         if (gate) return gate;
         const r = await B.refund(b.id, { amount: amount || null, reason: reason || '' });
         return { refunded: r.refunded, jobMoneyRefunded: r.jobRefunded, tipRefunded: r.tipRefunded, tipKept: B.totals(r.booking).tips, reference: r.reference, heldDepositReleasedNotCharged: Boolean(r.released), status: B.STATUS_WORDS[r.booking.status] };
@@ -139,10 +142,8 @@ function ownerTools(business) {
       inputSchema: z.object({ bookingId: z.string(), confirmed: z.boolean().optional() }),
       execute: safe(async ({ bookingId, confirmed }) => {
         const b = store.getBooking(mine(bookingId));
-        if (Date.parse(b.slotStart) > Date.now()) {
-          const gate = confirmGate('done', b.id, null, `${b.customerName}'s appointment is ${b.slotLabel}, which hasn't happened yet. Mark it done now and text the final bill anyway? Reply YES or NO.`, confirmed);
-          if (gate) return gate;
-        }
+        const gate = confirmGate('done', b, null, confirmed);
+        if (gate) return gate;
         const r = await B.markCompleted(b.id);
         return { ok: true, balanceDue: r.due || 0, linkSent: Boolean(r.payLink) };
       }),
@@ -175,7 +176,7 @@ function ownerTools(business) {
       inputSchema: z.object({ bookingId: z.string(), confirmed: z.boolean().optional() }),
       execute: safe(async ({ bookingId, confirmed }) => {
         const b = store.getBooking(mine(bookingId));
-        const gate = confirmGate('no_show', b.id, null, `Mark ${b.customerName} as a no-show for ${b.slotLabel}? Per the terms they agreed to, the ${B.usd(B.totals(b).depositPaid)} deposit is kept. Reply YES or NO.`, confirmed);
+        const gate = confirmGate('no_show', b, null, confirmed);
         if (gate) return gate;
         return brief(await B.markNoShow(b.id));
       }),
@@ -212,6 +213,7 @@ export async function ownerCommand(text) {
       .slice(-12)
       .map((x) => ({ role: x.role === 'owner' ? 'user' : 'assistant', content: x.text }));
     while (history.length && history[0].role !== 'user') history.shift();
+    const turnStart = Date.now();
     try {
       const result = await generateText({
         model: m.model,
@@ -223,6 +225,9 @@ export async function ownerCommand(text) {
         maxOutputTokens: 500,
       });
       reply = (result.text || '').trim() || 'Done.';
+      // A question the tools asked this turn always reaches the owner word for word, whatever the model wrote.
+      const asked = store.getOwnerPending(business.id);
+      if (asked?.kind === 'confirm' && asked.question && Date.parse(asked.at) >= turnStart && !reply.includes(asked.question)) reply = asked.question;
     } catch (err) {
       console.error(`Owner AI failed (${m.name}): ${err.message}. Using the scripted reply.`);
       reply = await scriptedOwnerReply(text);

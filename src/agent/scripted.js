@@ -3,6 +3,7 @@
 import * as store from '../store.js';
 import * as B from '../bookings.js';
 import { parseName, bareName } from './names.js';
+import { YES, questionFor, ask, recheck } from './confirm.js';
 
 const lower = (s) => String(s || '').toLowerCase();
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -258,30 +259,11 @@ export async function scriptedCustomerReply(lead) {
 }
 
 // ---------- the owner's scripted office manager ----------
-const YES = /^\s*(yes|y|yep|yeah|yup|confirm|confirmed|do it|go ahead|ok|okay|sure)\b/i;
 const NO = /^\s*(no|n|nope|nah|don'?t|stop|never ?mind|cancel that)\b/i;
 
 function describe(b) {
   const t = B.totals(b);
   return `${b.customerName}, ${b.service} ${b.slotLabel}, paid ${B.usd(t.paid)}${t.tips ? ` + ${B.usd(t.tips)} tip` : ''}`;
-}
-
-// What the owner is asked before money moves or a job closes early. Returns the question, or null to run now.
-function questionFor(action, b, amount) {
-  if (action === 'refund') {
-    const t = B.totals(b);
-    const full = amount === null || amount === undefined;
-    const sum = full ? Math.round((t.paid + t.tips) * 100) / 100 : amount;
-    const what = full && t.tips > 0 ? ` (${B.usd(t.paid)} paid plus the ${B.usd(t.tips)} tip)` : full ? '' : ` of the ${B.usd(t.paid)} paid`;
-    return `Refund ${B.usd(sum)}${what} to ${b.customerName}? Reply YES to send it back the way they paid, or NO.`;
-  }
-  if (action === 'no_show') {
-    return `Mark ${b.customerName} as a no-show for ${b.slotLabel}? Per the terms they agreed to, the ${B.usd(B.totals(b).depositPaid)} deposit is kept. Reply YES or NO.`;
-  }
-  if (action === 'done' && Date.parse(b.slotStart) > Date.now()) {
-    return `${b.customerName}'s appointment is ${b.slotLabel}, which hasn't happened yet. Mark it done now and text the final bill anyway? Reply YES or NO.`;
-  }
-  return null;
 }
 
 async function runAction(action, b, amount) {
@@ -315,10 +297,7 @@ async function askOrRun(businessId, action, matches, amount) {
   }
   const b = matches[0];
   const q = questionFor(action, b, amount);
-  if (q) {
-    store.setOwnerPending(businessId, { kind: 'confirm', action, amount, bookingId: b.id });
-    return q;
-  }
+  if (q) return ask(businessId, action, b, amount, q);
   return runAction(action, b, amount);
 }
 
@@ -373,7 +352,12 @@ export async function scriptedOwnerReply(text) {
       store.setOwnerPending(current.id, null);
       if (pending.kind === 'confirm' && YES.test(t)) {
         const b = store.getBooking(pending.bookingId);
-        if (b && mine(b)) return await runAction(pending.action, b, pending.amount);
+        if (b && mine(b)) {
+          // Only if the booking is still what the owner was asked about; else ask again with the new numbers.
+          const r = recheck(current.id, pending, b);
+          if (!r.go) return r.question;
+          return await runAction(pending.action, b, pending.amount);
+        }
       }
       if (NO.test(t)) return 'OK, nothing was changed.';
       if (pending.kind === 'choose') {

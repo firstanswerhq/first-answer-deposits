@@ -227,8 +227,10 @@ export function updateWaitlist(id, patch) {
 }
 
 // ---------- owner's text thread with the AI ----------
+// seq: a counter that only goes up, so "a message that arrived after the question" never depends on clock ticks.
 export function addOwnerMessage(role, text, extra = {}) {
-  const msg = { role, text, at: new Date().toISOString(), ...extra };
+  db.ownerSeq = (db.ownerSeq || 0) + 1;
+  const msg = { role, text, at: new Date().toISOString(), seq: db.ownerSeq, ...extra };
   db.ownerThread.push(msg);
   db.ownerThread = db.ownerThread.slice(-200);
   changed('owner_message', msg);
@@ -248,7 +250,7 @@ export function getOwnerPending(presetId) {
 }
 export function setOwnerPending(presetId, pending) {
   db.ownerPending = db.ownerPending || {};
-  if (pending) db.ownerPending[presetId] = { ...pending, at: new Date().toISOString() };
+  if (pending) db.ownerPending[presetId] = { ...pending, at: new Date().toISOString(), afterSeq: db.ownerSeq || 0 };
   else delete db.ownerPending[presetId];
   persist();
 }
