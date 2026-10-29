@@ -47,7 +47,7 @@ test('an outside assistant lists tools, quotes, books under budget and reads sta
   try {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
-    assert.deepEqual(names, ['get_business_info', 'check_availability', 'get_quote', 'book_appointment', 'get_booking_status', 'reschedule_booking', 'cancel_booking']);
+    assert.deepEqual(names, ['get_business_info', 'check_availability', 'get_quote', 'book_appointment', 'get_booking_status', 'reschedule_booking', 'cancel_booking', 'pay_balance']);
     assert.equal(tools.find((t) => t.name === 'get_quote').annotations.readOnlyHint, true);
     assert.equal(tools.find((t) => t.name === 'book_appointment').annotations.readOnlyHint, false);
     assert.match(client.getInstructions(), /cannot pay/);

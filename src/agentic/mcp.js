@@ -132,6 +132,8 @@ function bookingView(b) {
     approval_url: pending ? B.payPageUrl(pending) : null,
     approval_amount: pending ? pending.amount : null,
     human_approval_required: Boolean(pending),
+    deposit_held: t.onHold > 0 ? t.onHold : 0,
+    assistant_limit: b.mandate && b.mandate.status === 'active' ? { limit: b.mandate.limit, spent: b.mandate.spent || 0, remaining: Math.max(0, Math.round((b.mandate.limit - (b.mandate.spent || 0)) * 100) / 100), simulated: Boolean(b.mandate.demo) } : null,
     free_cancel_until: B.freeCancelLabel(b),
     booking_page: B.bookingPageUrl(b),
   };
@@ -156,6 +158,7 @@ export function buildServer(business, { base = config.publicUrl } = {}) {
         'Start with get_business_info. Quote only prices it returns. Use check_availability before naming a time, and pass the exact slot_start it returns to book_appointment.',
         `Booking holds the time for ${HOLD_MINUTES()} minutes. You cannot pay. Give the human the approval_url so they can approve the deposit in PayPal (PayPal, Venmo, Pay Later or card, no account needed).`,
         'Do not say the appointment is confirmed until get_booking_status returns status "confirmed". Keep booking_id and booking_key: they are needed to check, move or cancel.',
+        'After the job, pay_balance pays the final bill (and an optional tip) only if the human pre-approved a limit at the deposit and the amount fits inside it; otherwise it returns the approval_url for the human.',
       ].join(' '),
     },
   );
@@ -310,6 +313,33 @@ export function buildServer(business, { base = config.publicUrl } = {}) {
       const message =
         r.outcome === 'released' ? 'Canceled. Nothing was paid, so nothing is owed.' : r.outcome === 'refunded' ? `Canceled and ${B.usd(r.refunded)} refunded through PayPal (reference ${r.reference}).` : `Canceled after the free-cancel deadline (${r.deadline}). The ${B.usd(r.kept)} deposit is kept per the terms shown at booking.`;
       return ok({ canceled: true, outcome: r.outcome, refunded: r.refunded || 0, kept: r.kept || 0, ...bookingView(r.booking), message });
+    },
+  );
+
+  server.registerTool(
+    'pay_balance',
+    {
+      title: 'Pay the final bill',
+      description: 'After the job is done, pay the balance (plus an optional tip) from the wallet the human saved, ONLY if they pre-approved a spending limit for this booking at the deposit and the amount fits inside it. Returns payment_made and limit_check (limit, already spent, this payment, decision). Over the limit or with no limit, nothing is paid and approval_url comes back for the human. Needs booking_id and booking_key.',
+      inputSchema: { ...keyed, tip: z.number().min(0).max(500).optional().describe('Optional tip in dollars, if the human asked for one.') },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ booking_id, booking_key, tip }) => {
+      const b = requireBooking(business, booking_id, booking_key);
+      const agent = b.bookedBy || 'the assistant';
+      const r = await B.payWithMandate(b.id, { tip: tip || 0, agent });
+      const nb = store.getBooking(b.id);
+      if (r.paid) {
+        return ok({ ...bookingView(nb), payment_made: true, amount: r.amount, limit_check: r.check, capture_id: r.captureId, message: `Paid ${B.usd(r.amount)} inside the ${B.usd(r.check.limit)} limit the human pre-approved. No new approval was needed.${r.check.simulated ? ' (Demo: simulated, no PayPal call.)' : ''}` });
+      }
+      const why = {
+        job_not_done: 'The job is not marked done yet, so there is no final bill to pay.',
+        nothing_due: 'Nothing is due on this booking.',
+        no_mandate: `The human did not pre-approve a limit for this booking. Give them approval_url to pay the ${B.usd(r.amount || 0)} themselves.`,
+        over_limit: `${B.usd(r.amount || 0)} is over the limit (${B.usd(r.check?.remaining_before || 0)} left of ${B.usd(r.check?.limit || 0)}). Nothing was paid. Ask the human to approve it at approval_url.`,
+        paypal_declined: 'PayPal declined the saved wallet. Nothing was paid. Ask the human to pay at approval_url.',
+      }[r.reason];
+      return ok({ ...bookingView(nb), payment_made: false, reason: r.reason, amount: r.amount || null, limit_check: r.check, ...(r.approvalUrl ? { approval_url: r.approvalUrl, human_approval_required: true } : {}), message: why });
     },
   );
 

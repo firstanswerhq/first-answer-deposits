@@ -110,6 +110,10 @@ function publicBooking(b) {
     totals: B.totals(b),
     // What is owed right now: the deposit while a booking is held, the balance after that.
     owedNow: B.owedNow(b),
+    hold: B.totals(b).onHold > 0 ? `${B.usd(B.totals(b).onHold)} held in PayPal` : '',
+    bookedBy: b.bookedBy || null,
+    assistantLimit: b.mandate ? { limit: b.mandate.limit, spent: b.mandate.spent || 0, status: b.mandate.status, simulated: Boolean(b.mandate.demo) } : null,
+    disputes: (b.disputes || []).map((d) => ({ id: d.id, status: d.status, detail: d.detail, at: d.at })),
     freeCancelUntil: B.freeCancelLabel(b),
     changes: b.changes,
     payments: b.payments.map((p) => ({ id: p.id, label: p.label, kind: p.kind, amount: p.amount, tip: p.tip || 0, status: p.status, via: p.via || p.mode || null, refund: p.refund || null, at: p.completedAt || p.createdAt })),
@@ -160,7 +164,10 @@ app.get('/api/pay/:paymentId', (req, res) => {
   if (!found) return res.status(404).json({ error: 'This link is not valid.' });
   const { booking, payment } = found;
   res.json({
-    payment: { id: payment.id, label: payment.label, kind: payment.kind, amount: payment.amount, status: payment.status, tip: payment.tip || 0, expectedPayer: payment.expectedPayer || null },
+    payment: { id: payment.id, label: payment.label, kind: payment.kind, amount: payment.amount, status: payment.status, tip: payment.tip || 0, expectedPayer: payment.expectedPayer || null, intent: payment.status === 'pending' ? B.intentFor(booking, payment) : payment.intent || 'capture', held: payment.hold?.status || null },
+    // A deposit on a booking an AI assistant made: the customer may also let that assistant pay the final bill,
+    // up to a limit they choose (PayPal saves their wallet with consent).
+    mandateOffer: payment.status === 'pending' && payment.kind === 'deposit' && booking.source === 'agent' ? { agent: booking.bookedBy || 'your AI assistant', suggested: Math.max(10, Math.ceil((B.totals(booking).total - booking.deposit) * 1.2 / 10) * 10), max: B.MANDATE_MAX } : null,
     booking: publicBooking(booking),
     leadId: booking.leadId,
     bookingUrl: B.bookingPageUrl(booking),
@@ -170,7 +177,7 @@ app.get('/api/pay/:paymentId', (req, res) => {
 
 app.post('/api/pay/:paymentId/order', rateLimit(30, 10 * 60 * 1000), wrap(async (req, res) => {
   // checkoutFor drops any tip on a deposit: tips go on the final bill only.
-  const r = await B.checkoutFor(req.params.paymentId, { tip: B.clampTip(req.body.tip), redirect: Boolean(req.body.redirect) });
+  const r = await B.checkoutFor(req.params.paymentId, { tip: B.clampTip(req.body.tip), redirect: Boolean(req.body.redirect), mandate: req.body.mandate || null });
   if (r.paid) return res.json({ paid: true });
   if (r.error) return res.status(400).json({ error: r.error });
   if (r.demo) return res.json({ demo: true });
@@ -188,7 +195,7 @@ app.post('/api/pay/:paymentId/capture', wrap(async (req, res) => {
   if (!paypalReady) {
     // Demo checkout only exists when the host has no PayPal keys. Same 0 to $500 tip rule as the order route,
     // and only on the final bill: a deposit takes no tip.
-    if (found.payment.status === 'pending') B.completeDemoPayment(found.payment.id, { tip: B.tipFor(found.payment, req.body.tip) });
+    if (found.payment.status === 'pending') B.completeDemoPayment(found.payment.id, { tip: B.tipFor(found.payment, req.body.tip), mandate: req.body.mandate || null });
   } else {
     // Capture the order the buyer approved, and only if this payment made it.
     const orderId = req.body.orderID ? String(req.body.orderID) : null;
@@ -366,6 +373,14 @@ app.post('/api/owner/bookings/:id/done', ownerOnly, ownerOfBooking, ownerAction(
 app.post('/api/owner/bookings/:id/cancel', ownerOnly, ownerOfBooking, ownerAction((req) => B.businessCancel(req.params.id, req.body.reason || '')));
 app.post('/api/owner/bookings/:id/release', ownerOnly, ownerOfBooking, ownerAction((req) => B.releaseHold(req.params.id, 'Released by the owner')));
 app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerOfBooking, ownerAction((req) => B.recordOutsidePayment(req.params.id, { amount: Number(req.body.amount), method: String(req.body.method || 'cash') })));
+// Demo servers only (no PayPal keys): play a PayPal dispute on a paid booking so the owner can watch the AI send
+// the evidence file. With keys, disputes arrive from PayPal's CUSTOMER.DISPUTE.CREATED webhook instead.
+app.post('/api/owner/bookings/:id/demo-dispute', ownerOnly, ownerOfBooking, ownerAction(async (req) => {
+  if (paypalReady) throw new Error('This server has PayPal keys: real disputes come in from PayPal, so there is no practice dispute here.');
+  const b = store.getBooking(req.params.id);
+  if (!(B.totals(b).paid > 0)) throw new Error(`${b.customerName} hasn't paid anything, so there is nothing to dispute.`);
+  return B.defendDispute(b.id, { disputeId: `DEMO-DISPUTE-${b.id.slice(-5).toUpperCase()}`, reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: B.totals(b).paid, demo: true });
+}));
 app.post('/api/owner/rebook', ownerOnly, ownerOfCurrent, ownerAction(() => B.sendRebookNudges({ force: true, presetId: B.currentBusiness().id })));
 
 // Kept for older pages: checks that this browser may open the business. It no longer changes a saved setting;
@@ -420,6 +435,7 @@ connect.startPushing();
 
 // ---------- background jobs ----------
 setInterval(() => B.releaseStaleHolds().catch((e) => console.error('releaseStaleHolds', e.message)), 60 * 1000).unref();
+setInterval(() => B.settleExpiringHolds().catch((e) => console.error('settleExpiringHolds', e.message)), 10 * 60 * 1000).unref();
 setInterval(() => B.sendRebookNudges().catch((e) => console.error('rebook', e.message)), 60 * 60 * 1000).unref();
 
 // Tests import the app and listen on their own port (FAD_NO_LISTEN=1).

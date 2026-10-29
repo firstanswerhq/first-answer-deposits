@@ -222,6 +222,32 @@ async function scriptedTurn(s, text, url, trace) {
     const followUp = /\b(cancel|move|reschedule|change|switch|instead|status|paid|pay|confirmed|booked|approve|deposit|when is|what time)\b/.test(t);
     if (s.booking && (followUp || s.pending === 'move' || !pickService(biz.services, text))) {
       const keyed = { booking_id: s.booking.id, booking_key: s.booking.key };
+      // "Pay the final bill and add a $20 tip": the business's pay_balance tool pays only inside the limit the
+      // human pre-approved at the deposit; anything else comes back to the human as an approval.
+      if ((/\b(pay|settle|cover)\b.*\b(bill|balance|rest|owe|final|remaining)\b|\btip\b|^\s*(please\s+)?pay (it|that|this)\b/.test(t)) && !/\b(did|have) i\b/.test(t)) {
+        let tip = 0;
+        const dollars = text.match(/\$\s?(\d+(?:\.\d+)?)\s*(?:tip)?/i) || text.match(/tip(?:\s+of)?\s+\$?(\d+(?:\.\d+)?)/i);
+        const pct = text.match(/(\d{1,2})\s*%/);
+        if (pct) {
+          const st = await mcp.call('get_booking_status', keyed);
+          tip = Math.round((st.due || 0) * Number(pct[1])) / 100;
+        } else if (dollars && /tip/i.test(text)) tip = Number(dollars[1]);
+        const r = await mcp.call('pay_balance', { ...keyed, ...(tip ? { tip } : {}) });
+        const c = r.limit_check;
+        if (r.payment_made) {
+          return { reply: `Paid ${usd(r.amount)}${tip ? ` (${usd(r.amount - tip)} balance + ${usd(tip)} tip)` : ''} from your saved PayPal, inside the ${usd(c.limit)} limit you set at the deposit. No new approval needed. You're all paid up.${c.simulated ? ' (Demo: simulated, no PayPal call.)' : ''}`, approval: null, paid: true };
+        }
+        const approval = r.approval_url ? { url: r.approval_url, amount: r.amount || r.approval_amount, bookingId: r.booking_id, label: 'Final bill' } : null;
+        const reply =
+          r.reason === 'over_limit'
+            ? `That's ${usd(r.amount)}, over the ${usd(c.limit)} limit you set (${usd(c.remaining_before)} left), so I didn't pay it. Approve it in PayPal if it looks right.`
+            : r.reason === 'no_mandate'
+              ? `You didn't give me a spending limit for this booking, so I can't pay the ${usd(r.amount)}. Approve it in PayPal.`
+              : r.reason === 'job_not_done'
+                ? `The business hasn't marked the job done yet, so there's no final bill. Once they do, I can pay it${s.booking.limit ? ` inside your ${usd(s.booking.limit)} limit` : ''}.`
+                : r.message;
+        return { reply, approval };
+      }
       if (/\bcancel\b/.test(t)) {
         const r = await mcp.call('cancel_booking', keyed);
         s.booking = null;
@@ -254,9 +280,11 @@ async function scriptedTurn(s, text, url, trace) {
         r.status === 'held'
           ? `Still waiting on you: approve the ${usd(r.approval_amount)} deposit in PayPal and ${r.appointment} is locked in.`
           : r.status === 'confirmed'
-            ? `You're confirmed for ${r.appointment}. Paid ${usd(r.paid)}, ${usd(r.due)} due after the job.`
-            : `Status: ${r.status_words}. Paid ${usd(r.paid)}, due ${usd(r.due)}.`;
-      return { reply: line, approval: r.approval_url ? { url: r.approval_url, amount: r.approval_amount, bookingId: r.booking_id } : null };
+            ? `You're confirmed for ${r.appointment}. ${r.deposit_held ? `Your ${usd(r.deposit_held)} deposit is held in PayPal, not charged until the job is done` : `Paid ${usd(r.paid)}`}, ${usd(r.due)} due after the job.${r.assistant_limit ? ` I can pay the final bill for you, up to ${usd(r.assistant_limit.remaining)}.` : ''}`
+            : r.status === 'completed'
+              ? `The job is done. The final bill is ${usd(r.due)}.${r.assistant_limit ? ` Say "pay it" and I'll pay it inside your ${usd(r.assistant_limit.limit)} limit.` : ' Approve it in PayPal.'}`
+              : `Status: ${r.status_words}. Paid ${usd(r.paid)}, due ${usd(r.due)}.`;
+      return { reply: line, approval: r.approval_url ? { url: r.approval_url, amount: r.approval_amount, bookingId: r.booking_id, ...(r.status === 'completed' ? { label: 'Final bill' } : {}) } : null };
     }
 
     // Learn what we can from this message.
@@ -378,7 +406,8 @@ async function modelTurn(s, text, url, trace, model) {
       model,
       system: `You are the customer's personal AI assistant (your name is ${agentName()}). The customer wants you to book a local service business for them. The business's booking system is available as tools over MCP.
 How to work: call get_business_info first, then get_quote, then check_availability, then book_appointment with the exact slot_start. Pass the customer's budget as max_total if they gave one, and agent_name "${agentName()}". Use their name as customer_name; ask for it if you do not have it. Ask one short question when something is missing. If the exact time they asked for is taken, book the closest open time within their budget and tell them which time you held (they can move it); do not stall on a question.
-Money: you cannot pay. When book_appointment returns approval_url, tell the customer the total, the deposit due now, that only they can approve it in PayPal (card, Venmo and Pay Later work too, no account needed), and give the link. Never say the appointment is confirmed until get_booking_status says confirmed.
+Money: you cannot pay the deposit. When book_appointment returns approval_url, tell the customer the total, the deposit due now, that only they can approve it in PayPal (card, Venmo and Pay Later work too, no account needed), and give the link. Never say the appointment is confirmed until get_booking_status says confirmed.
+After the job, if they ask you to pay the final bill (and maybe a tip), call pay_balance. It pays only inside the spending limit they pre-approved at the deposit; if it returns payment_made false, tell them why (over the limit, no limit, job not done) and give approval_url.
 Style: 1 to 3 short plain sentences, no markdown, no lists.`,
       messages,
       tools,
@@ -404,6 +433,7 @@ Style: 1 to 3 short plain sentences, no markdown, no lists.`,
           s.booking = { id: data.booking_id, key: data.booking_key, slotStart: data.slot_start, approvalUrl: data.approval_url, amount: data.approval_amount };
         }
         if ((tr.toolName === 'get_booking_status' || tr.toolName === 'reschedule_booking') && data?.approval_url) approval = { url: data.approval_url, amount: data.approval_amount, bookingId: data.booking_id };
+        if (tr.toolName === 'pay_balance') approval = data?.payment_made ? null : data?.approval_url ? { url: data.approval_url, amount: data.amount || data.approval_amount, bookingId: data.booking_id, label: 'Final bill' } : approval;
       }
     }
     return { reply: (result.text || '').trim() || 'Done.', approval };

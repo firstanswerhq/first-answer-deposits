@@ -118,7 +118,7 @@ function ownerTools(business) {
         const gate = confirmGate('refund', b.id, amount || null, `Refund ${B.usd(sum)}${!amount && t.tips > 0 ? ` (${B.usd(t.paid)} paid plus the ${B.usd(t.tips)} tip)` : ''} to ${b.customerName}? Reply YES to send it back the way they paid, or NO.`, confirmed);
         if (gate) return gate;
         const r = await B.refund(b.id, { amount: amount || null, reason: reason || '' });
-        return { refunded: r.refunded, jobMoneyRefunded: r.jobRefunded, tipRefunded: r.tipRefunded, tipKept: B.totals(r.booking).tips, reference: r.reference, status: B.STATUS_WORDS[r.booking.status] };
+        return { refunded: r.refunded, jobMoneyRefunded: r.jobRefunded, tipRefunded: r.tipRefunded, tipKept: B.totals(r.booking).tips, reference: r.reference, heldDepositReleasedNotCharged: Boolean(r.released), status: B.STATUS_WORDS[r.booking.status] };
       }),
     }),
     business_cancel: tool({

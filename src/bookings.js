@@ -9,10 +9,19 @@ import * as paypal from './paypal.js';
 import { config, paypalReady } from './config.js';
 import { openSlots, isSlotOpen, formatSlot } from './slots.js';
 import { cachedBusy } from './busy.js';
+import { textPdf } from './pdf.js';
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const sum = (arr) => round2(arr.reduce((a, b) => a + Number(b || 0), 0));
 export const usd = (n) => `$${Number(n).toFixed(Number(n) % 1 ? 2 : 0)}`;
+
+// Deposit holds. PayPal honors an authorization for 3 days (valid up to 29, but funds are only reliably there in the
+// honor period). So a deposit is authorized (held, not charged) only when the job and its final bill fit inside that
+// window: the job must end at least BILL_MARGIN_HOURS before the honor period does. Anything later is captured at
+// booking, as before. A hold whose honor period is about to end on an active booking is captured then.
+export const HONOR_HOURS = 72;
+export const BILL_MARGIN_HOURS = 6;
+const HOUR = 3600 * 1000;
 
 // A canceled, refunded or no-show booking is closed: its links take no money and nothing is owed on it.
 const CLOSED = ['canceled', 'refunded', 'no_show'];
@@ -94,8 +103,11 @@ export function totals(booking) {
   // A canceled, refunded or no-show booking is closed: nothing more is owed on it.
   const due = CLOSED.includes(booking.status) ? 0 : Math.max(0, round2(total - paid));
   const depositPaid = sum(done.filter((p) => p.kind === 'deposit').map((p) => p.amount)) - sum(booking.payments.filter((p) => p.kind === 'deposit').map((p) => p.refund?.amount || 0));
+  // onHold: deposits the customer approved that are authorized on their PayPal but not captured yet. They count
+  // toward the bill (paid) like any deposit; they are just not in the business's account yet.
+  const onHold = sum(booking.payments.filter((p) => p.status === 'completed' && p.hold?.status === 'authorized').map((p) => p.amount - (p.refund?.amount || 0)));
   // tips: tips the crew keeps (net of any tip refunded). refunded: job money refunded; tipsRefunded: tips refunded.
-  return { total, paid, due, tips: round2(tipsGross - tipsRefunded), tipsRefunded, refunded, depositPaid: round2(depositPaid) };
+  return { total, paid, due, tips: round2(tipsGross - tipsRefunded), tipsRefunded, refunded, depositPaid: round2(depositPaid), onHold };
 }
 
 // What the customer owes right now: only the deposit while the booking is held, then the balance.
@@ -146,11 +158,94 @@ export function payPageUrl(payment) {
   return `${config.publicUrl}/p/${payment.id}`;
 }
 
+// ---------------- deposit holds (authorize now, capture or void later) ----------------
+// 'authorize' when this deposit can be a hold: the job ends early enough that the final bill lands inside PayPal's
+// 3-day honor period. Every other payment (balances, later jobs) is captured right away.
+export function intentFor(booking, payment, now = Date.now()) {
+  if (payment?.kind !== 'deposit' || !booking?.slotStart) return 'capture';
+  const minutes = businessOf(booking).slotMinutes || 120;
+  const jobEnd = Date.parse(booking.slotStart) + minutes * 60000;
+  return jobEnd + BILL_MARGIN_HOURS * HOUR <= now + HONOR_HOURS * HOUR ? 'authorize' : 'capture';
+}
+
+function holdRecord({ authorizationId, demo = false, expirationTime = null }) {
+  const at = Date.now();
+  return {
+    authorizationId,
+    status: 'authorized',
+    authorizedAt: new Date(at).toISOString(),
+    honorUntil: new Date(at + HONOR_HOURS * HOUR).toISOString(),
+    expiresAt: expirationTime || new Date(at + 29 * 24 * HOUR).toISOString(),
+    ...(demo ? { demo: true } : {}),
+  };
+}
+
+// Takes the held deposit (no-show, late cancel, the final bill, or the honor period running out). Returns true when
+// the money was captured; false when PayPal refused (the hold is then marked failed and the amount is owed again).
+export async function captureHold(paymentId, why = 'Applied to the final bill') {
+  const found = store.findPayment(paymentId);
+  if (!found) return false;
+  const { booking, payment } = found;
+  const hold = payment.hold;
+  if (!hold || hold.status !== 'authorized') return hold?.status === 'captured';
+  const keep = round2(payment.amount - (payment.refund?.amount || 0));
+  let cap = { captureId: `DEMO-CAPTURE-${crypto.randomBytes(3).toString('hex').toUpperCase()}`, status: 'COMPLETED', fee: null, net: null };
+  if (!hold.demo && paypalReady) {
+    try {
+      cap = await paypal.captureAuthorization(hold.authorizationId, { amount: keep, finalCapture: true, note: why });
+    } catch (err) {
+      cap = { status: 'FAILED', error: err.message };
+    }
+  }
+  if (cap.status !== 'COMPLETED' && cap.status !== 'PENDING') {
+    store.updatePayment(payment.id, { status: 'failed', hold: { ...hold, status: 'failed', failedAt: new Date().toISOString(), error: cap.error || cap.status } });
+    store.addTimeline(booking.id, `Could not capture the ${usd(keep)} deposit hold (${cap.error || cap.status}). It is owed again on the bill.`);
+    store.logActivity(`PayPal would not capture ${booking.customerName}'s ${usd(keep)} deposit hold. It was added back to what they owe.`, { bookingId: booking.id, kind: 'hold_failed' });
+    return false;
+  }
+  store.updatePayment(payment.id, { captureId: cap.captureId, fee: cap.fee, net: cap.net, hold: { ...hold, status: 'captured', captureId: cap.captureId, capturedAt: new Date().toISOString(), amount: keep } });
+  store.addTimeline(booking.id, `Captured the ${usd(keep)} deposit hold (${why}). PayPal capture ${cap.captureId}${hold.demo ? ' (demo)' : ''}.`);
+  return true;
+}
+
+async function captureHolds(booking, why) {
+  for (const p of booking.payments.filter((x) => x.status === 'completed' && x.hold?.status === 'authorized')) await captureHold(p.id, why);
+  return store.getBooking(booking.id);
+}
+
+// Releases a held deposit without charging anything (free cancel, the business canceled, a full refund).
+async function voidHold(payment) {
+  const hold = payment.hold;
+  if (!hold || hold.status !== 'authorized') return null;
+  let refundId = `DEMO-VOID-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  if (!hold.demo && paypalReady) {
+    await paypal.voidAuthorization(hold.authorizationId);
+    refundId = `VOID-${hold.authorizationId}`;
+  }
+  store.updatePayment(payment.id, { hold: { ...hold, status: 'voided', voidedAt: new Date().toISOString() } });
+  return refundId;
+}
+
+// A hold whose honor period ends soon, on a booking that is still on, is captured before PayPal stops honoring it.
+export async function settleExpiringHolds(now = Date.now()) {
+  let n = 0;
+  for (const b of store.listBookings().filter((x) => ['confirmed', 'completed', 'needs_rebook'].includes(x.status))) {
+    for (const p of b.payments.filter((x) => x.status === 'completed' && x.hold?.status === 'authorized')) {
+      if (Date.parse(p.hold.honorUntil) - now <= BILL_MARGIN_HOURS * HOUR) {
+        await captureHold(p.id, "PayPal's 3-day hold window was ending, so the deposit was captured as a regular deposit");
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
 // ---------------- PayPal links ----------------
-async function attachOrder(booking, payment, { tip = 0, redirect = true } = {}) {
+async function attachOrder(booking, payment, { tip = 0, redirect = true, mandate = null } = {}) {
   const business = businessOf(booking);
+  const intent = intentFor(booking, payment);
   if (!paypalReady) {
-    store.updatePayment(payment.id, { mode: 'demo', orderId: null, paypalLink: null });
+    store.updatePayment(payment.id, { mode: 'demo', orderId: null, paypalLink: null, intent });
     return null;
   }
   const what = payment.kind === 'deposit' ? 'Deposit' : payment.kind === 'balance' ? 'Balance' : 'Payment';
@@ -165,10 +260,13 @@ async function attachOrder(booking, payment, { tip = 0, redirect = true } = {}) 
     returnUrl: `${config.publicUrl}/pay/return?payment=${payment.id}`,
     cancelUrl: `${config.publicUrl}/pay/cancel?payment=${payment.id}`,
     redirect,
+    intent: intent === 'authorize' ? 'AUTHORIZE' : 'CAPTURE',
+    vault: Boolean(mandate),
   });
-  // Keep every order made for this payment (with its tip) so a capture can be checked against them.
-  const orders = [...(store.findPayment(payment.id).payment.orders || []), { id: orderId, tip }].slice(-20);
-  store.updatePayment(payment.id, { mode: 'paypal', orderId, orders, paypalLink: payLink || null, orderMode: redirect ? 'redirect' : 'buttons', tip, orderCreatedAt: new Date().toISOString() });
+  // Keep every order made for this payment (with its tip, intent and any mandate offered) so a capture can be
+  // checked against them and the right next step (capture or authorize) is taken.
+  const orders = [...(store.findPayment(payment.id).payment.orders || []), { id: orderId, tip, intent, ...(mandate ? { mandate } : {}) }].slice(-20);
+  store.updatePayment(payment.id, { mode: 'paypal', orderId, orders, paypalLink: payLink || null, orderMode: redirect ? 'redirect' : 'buttons', tip, intent, mandateOffer: mandate || null, orderCreatedAt: new Date().toISOString() });
   return payLink;
 }
 
@@ -217,7 +315,7 @@ export function notPayable(booking, payment) {
 }
 
 // Where the short link sends people. Makes a fresh PayPal order if the old one went stale, so links never "expire".
-export async function checkoutFor(paymentId, { tip = 0, redirect = false } = {}) {
+export async function checkoutFor(paymentId, { tip = 0, redirect = false, mandate = null } = {}) {
   const found = store.findPayment(paymentId);
   if (!found) return { error: 'not_found' };
   const { booking, payment } = found;
@@ -225,11 +323,13 @@ export async function checkoutFor(paymentId, { tip = 0, redirect = false } = {})
   const why = notPayable(booking, payment);
   if (why) return { error: why, booking, payment };
   tip = tipFor(payment, tip);
+  mandate = mandateOfferFor(booking, payment, mandate);
   if (!paypalReady) return { demo: true, booking, payment };
   const stale = Date.now() - Date.parse(payment.orderCreatedAt || 0) > 2 * 3600 * 1000;
   const wantMode = redirect ? 'redirect' : 'buttons';
-  if (!payment.orderId || stale || payment.orderMode !== wantMode || Number(payment.tip || 0) !== Number(tip || 0)) {
-    await attachOrder(booking, payment, { tip, redirect });
+  const sameMandate = (payment.mandateOffer?.limit || 0) === (mandate?.limit || 0);
+  if (!payment.orderId || stale || payment.orderMode !== wantMode || Number(payment.tip || 0) !== Number(tip || 0) || payment.intent !== intentFor(booking, payment) || !sameMandate) {
+    await attachOrder(booking, payment, { tip, redirect, mandate });
   }
   const p = store.findPayment(paymentId).payment;
   return { orderId: p.orderId, url: p.paypalLink, booking, payment: p };
@@ -334,7 +434,9 @@ export async function bookAndRequestDeposit({ leadId, serviceId, size, slotStart
 }
 
 // ---------------- payment completed (from return page, polling or webhook) ----------------
-export function completePayment(paymentId, { captureId = null, fee = null, net = null, payerEmail = null, payerName = null, via = 'paypal', tip = null } = {}) {
+// hold: set when the deposit was authorized (held on the customer's PayPal) instead of captured.
+// mandate: set when the customer also let their assistant pay this booking's final bill up to a limit.
+export function completePayment(paymentId, { captureId = null, fee = null, net = null, payerEmail = null, payerName = null, via = 'paypal', tip = null, hold = null, mandate = null } = {}) {
   const found = store.findPayment(paymentId);
   if (!found) return null;
   const { booking, payment } = found;
@@ -348,20 +450,24 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
     payerEmail,
     payerName,
     via,
+    ...(hold ? { hold } : {}),
     ...(tip !== null ? { tip } : {}),
   });
+  if (hold) store.addTimeline(booking.id, `Deposit held on the customer's PayPal, not charged yet: authorization ${hold.authorizationId}${hold.demo ? ' (demo)' : ''}. It is captured on the final bill or a no-show and released on a free cancel. PayPal honors it until ${formatSlot(hold.honorUntil, businessOf(booking).timezone)}.`);
+  if (mandate) grantMandate(booking.id, mandate);
   if (payment.invoice && via !== 'PayPal invoice') retireInvoice(payment, 'This deposit was paid another way, so the invoice is no longer needed.');
   const b = store.getBooking(booking.id);
   const t = totals(b);
   const p = store.findPayment(paymentId).payment;
   const who = payerName && payerName !== b.customerName ? ` (paid by ${payerName})` : '';
-  store.addTimeline(b.id, `${p.label || p.kind} paid: ${usd(p.amount)}${p.tip ? ` + ${usd(p.tip)} tip` : ''} via ${via}${who}. PayPal capture ${captureId || 'n/a'}.`);
+  store.addTimeline(b.id, hold ? `${p.label || p.kind} approved: ${usd(p.amount)} via ${via}${who} (held, not charged yet).` : `${p.label || p.kind} paid: ${usd(p.amount)}${p.tip ? ` + ${usd(p.tip)} tip` : ''} via ${via}${who}. PayPal capture ${captureId || 'n/a'}.`);
 
   if (p.kind === 'deposit') {
     if (b.status === 'held' && t.depositPaid + 0.001 >= b.deposit) {
       store.updateBooking(b.id, { status: 'confirmed', confirmedAt: new Date().toISOString() });
-      store.addMessage(b.leadId, 'assistant', `Got your ${usd(b.deposit)} deposit${who}, thank you! You're confirmed for ${b.service} on ${b.slotLabel}. ${termsLine(store.getBooking(b.id))} Your booking: ${bookingPageUrl(b)}`, { kind: 'confirmation' });
-      store.logActivity(`Deposit paid: ${usd(b.deposit)} from ${b.customerName}${who}. ${b.slotLabel} is confirmed.`, { bookingId: b.id, kind: 'deposit_paid' });
+      const held = hold ? ` It's a hold on your PayPal: you're not charged until the job is done, and a free cancel releases it.` : '';
+      store.addMessage(b.leadId, 'assistant', `Got your ${usd(b.deposit)} deposit${who}, thank you! You're confirmed for ${b.service} on ${b.slotLabel}.${held} ${termsLine(store.getBooking(b.id))} Your booking: ${bookingPageUrl(b)}`, { kind: 'confirmation' });
+      store.logActivity(`Deposit ${hold ? 'held' : 'paid'}: ${usd(b.deposit)} from ${b.customerName}${who}${hold ? ' (authorized in PayPal, captured on the final bill)' : ''}. ${b.slotLabel} is confirmed.`, { bookingId: b.id, kind: 'deposit_paid' });
     } else if (b.status === 'held') {
       store.addMessage(b.leadId, 'assistant', `Got ${usd(p.amount)}${who} toward the deposit. ${usd(round2(b.deposit - t.depositPaid))} to go and you're confirmed.`, { kind: 'partial' });
       store.logActivity(`Split deposit: ${usd(p.amount)} in for ${b.customerName}${who}.`, { bookingId: b.id });
@@ -370,6 +476,7 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
     const after = totals(store.getBooking(b.id));
     if (after.due <= 0.001) {
       store.updateBooking(b.id, { status: 'paid_in_full', paidInFullAt: new Date().toISOString() });
+      endMandate(b.id, 'used', 'The booking is paid in full.');
       store.addMessage(
         b.leadId,
         'assistant',
@@ -399,11 +506,25 @@ export async function syncPayment(paymentId, { orderId = null } = {}) {
   if (notPayable(found.booking, payment)) return found.booking;
   const orderTip = (payment.orders || []).find((o) => o.id === useOrder)?.tip;
   const tip = orderTip === undefined ? null : orderTip;
+  const saved = (payment.orders || []).find((o) => o.id === useOrder) || {};
   const order = await paypal.getOrder(useOrder);
+  const isAuth = String(order.intent || '').toUpperCase() === 'AUTHORIZE' || saved.intent === 'authorize';
+  if (isAuth && (order.status === 'APPROVED' || order.status === 'COMPLETED')) {
+    // A deposit hold: authorize the approved order (or read the authorization if it already happened).
+    const a = order.status === 'APPROVED' ? await paypal.authorizeOrder(useOrder) : paypal.authorizationFrom(order);
+    if (a.authorizationId && ['CREATED', 'PENDING', 'CAPTURED'].includes(a.authStatus || 'CREATED')) {
+      return completePayment(paymentId, { payerEmail: a.payerEmail, payerName: a.payerName, hold: holdRecord({ authorizationId: a.authorizationId, expirationTime: a.expirationTime }), mandate: mandateFromVault(saved.mandate, a.vault) });
+    }
+    if (a.authStatus === 'DENIED') {
+      store.updatePayment(paymentId, { lastError: 'declined' });
+      store.addMessage(found.booking.leadId, 'assistant', `That payment didn't go through (it was declined). Nothing was held or charged. Here's a fresh link to try again: ${payPageUrl(payment)}`, { kind: 'payment_failed' });
+    }
+    return store.getBooking(found.booking.id);
+  }
   if (order.status === 'APPROVED') {
     const cap = await paypal.captureOrder(useOrder);
     if (cap.captureStatus === 'COMPLETED' || cap.status === 'COMPLETED') {
-      return completePayment(paymentId, { captureId: cap.captureId, fee: cap.fee, net: cap.net, payerEmail: cap.payerEmail, payerName: cap.payerName, tip });
+      return completePayment(paymentId, { captureId: cap.captureId, fee: cap.fee, net: cap.net, payerEmail: cap.payerEmail, payerName: cap.payerName, tip, mandate: mandateFromVault(saved.mandate, cap.vault) });
     }
     if (cap.captureStatus === 'DECLINED') {
       store.updatePayment(paymentId, { lastError: 'declined' });
@@ -418,13 +539,104 @@ export async function syncPayment(paymentId, { orderId = null } = {}) {
 
 // Demo money: the demo checkout (no PayPal keys) and "Load a sample day" (which runs even when keys are set).
 // It is saved as demo money, so refunds settle it here without calling PayPal and payouts never send it.
-export function completeDemoPayment(paymentId, { tip = 0 } = {}) {
+// A deposit that qualifies is held (a simulated authorization) the same way PayPal would hold it.
+export function completeDemoPayment(paymentId, { tip = 0, mandate = null } = {}) {
   const found = store.findPayment(paymentId);
-  if (found && found.payment.status === 'pending') store.updatePayment(paymentId, { mode: 'demo', demo: true });
-  return completePayment(paymentId, { via: 'demo checkout', captureId: 'DEMO-' + paymentId, tip: clampTip(tip) || null });
+  if (!found) return null;
+  if (found.payment.status !== 'pending') return found.booking;
+  const intent = intentFor(found.booking, found.payment);
+  store.updatePayment(paymentId, { mode: 'demo', demo: true, intent });
+  const offer = mandateOfferFor(found.booking, found.payment, mandate);
+  const demoMandate = offer ? { ...offer, vaultId: `DEMO-VAULT-${crypto.randomBytes(3).toString('hex').toUpperCase()}`, status: 'active', demo: true } : null;
+  if (intent === 'authorize') {
+    return completePayment(paymentId, { via: 'demo checkout', captureId: null, hold: holdRecord({ authorizationId: `DEMO-AUTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`, demo: true }), mandate: demoMandate });
+  }
+  return completePayment(paymentId, { via: 'demo checkout', captureId: 'DEMO-' + paymentId, tip: clampTip(tip) || null, mandate: demoMandate });
 }
 // True for money that never went through PayPal's servers (demo checkout or a sample day).
-export const isDemoMoney = (p) => Boolean(p?.demo || p?.mode === 'demo' || String(p?.captureId || '').startsWith('DEMO-'));
+export const isDemoMoney = (p) => Boolean(p?.demo || p?.mode === 'demo' || p?.hold?.demo || String(p?.captureId || '').startsWith('DEMO-'));
+
+// ---------------- the assistant's spending limit (a mandate the human grants once) ----------------
+// At the deposit, a customer whose AI assistant booked can also say "my assistant may pay the rest of this booking,
+// up to $X". PayPal saves their wallet with their consent (vault, store_in_vault ON_SUCCESS) and the business's MCP
+// pay_balance tool then charges it only while the amount fits inside that limit. Over the limit, the human approves.
+export const MANDATE_MAX = 2000;
+export function mandateOfferFor(booking, payment, mandate) {
+  const limit = round2(Number(mandate?.limit));
+  if (!mandate || !Number.isFinite(limit) || limit <= 0) return null;
+  if (payment?.kind !== 'deposit' || booking?.source !== 'agent') return null;
+  return { limit: Math.min(limit, MANDATE_MAX) };
+}
+function mandateFromVault(offer, vault) {
+  if (!offer) return null;
+  if (vault?.id && (vault.status === 'VAULTED' || !vault.status)) return { ...offer, vaultId: vault.id, customerId: vault.customerId || null, status: 'active' };
+  // PayPal approved the payment but did not save the wallet yet (or at all): no limit is active, and the assistant
+  // will ask the human for the final bill the normal way.
+  return { ...offer, vaultId: null, status: 'not_saved', vaultStatus: vault?.status || 'missing' };
+}
+export function grantMandate(bookingId, m) {
+  const b = store.getBooking(bookingId);
+  if (!b) return null;
+  const mandate = { limit: m.limit, spent: 0, vaultId: m.vaultId || null, customerId: m.customerId || null, status: m.status || 'active', scope: 'This booking only: the final balance and tip.', grantedAt: new Date().toISOString(), ...(m.demo ? { demo: true } : {}) };
+  store.updateBooking(b.id, { mandate });
+  if (mandate.status === 'active') {
+    store.addTimeline(b.id, `${b.customerName} let ${b.bookedBy || 'their AI assistant'} pay this booking's final bill and tip without asking again, up to ${usd(mandate.limit)}. PayPal saved their wallet with consent (vault ${mandate.vaultId}${mandate.demo ? ', demo' : ''}).`);
+    store.logActivity(`${b.customerName} pre-approved ${b.bookedBy || 'their assistant'} to pay up to ${usd(mandate.limit)} on this booking.`, { bookingId: b.id, kind: 'mandate' });
+  } else {
+    store.addTimeline(b.id, `${b.customerName} asked to let their assistant pay up to ${usd(mandate.limit)}, but PayPal did not save the wallet (${m.vaultStatus || 'no vault id'}), so the final bill will need their approval.`);
+  }
+  return mandate;
+}
+function endMandate(bookingId, status, why) {
+  const b = store.getBooking(bookingId);
+  if (!b?.mandate || b.mandate.status !== 'active') return;
+  store.updateBooking(b.id, { mandate: { ...b.mandate, status, endedAt: new Date().toISOString(), endedWhy: why } });
+}
+
+// The check the MCP pay_balance tool shows in the trace: limit, spent so far, this payment, and the decision.
+export function mandateCheck(booking, amount) {
+  const m = booking.mandate;
+  const active = m && m.status === 'active' && m.vaultId;
+  const limit = active ? m.limit : 0;
+  const spent = active ? m.spent || 0 : 0;
+  const remaining = round2(limit - spent);
+  const decision = !active ? 'no_limit_ask_human' : amount <= remaining + 0.001 ? 'within_limit_pay' : 'over_limit_ask_human';
+  return { limit, already_spent: spent, this_payment: round2(amount), remaining_before: Math.max(0, remaining), decision, scope: m?.scope || null, simulated: Boolean(m?.demo) };
+}
+
+// The assistant pays the final balance (plus an optional tip) from the saved wallet, only inside the limit.
+export async function payWithMandate(bookingId, { tip = 0, agent = 'the assistant' } = {}) {
+  const b = store.getBooking(bookingId);
+  if (!b) throw new Error('Booking not found.');
+  const pending = b.payments.find((p) => p.status === 'pending' && p.kind === 'balance');
+  if (b.status !== 'completed' || !pending) {
+    return { paid: false, reason: b.status === 'confirmed' || b.status === 'held' ? 'job_not_done' : 'nothing_due', check: null };
+  }
+  tip = clampTip(tip);
+  const amount = round2(pending.amount + tip);
+  const check = mandateCheck(b, amount);
+  if (check.decision !== 'within_limit_pay') {
+    store.addTimeline(b.id, `${agent} tried to pay ${usd(amount)} but it is ${check.decision === 'no_limit_ask_human' ? 'not pre-approved' : `over the ${usd(check.limit)} limit (${usd(check.already_spent)} already spent)`}, so the customer was asked to approve it.`);
+    return { paid: false, reason: check.decision === 'no_limit_ask_human' ? 'no_mandate' : 'over_limit', check, approvalUrl: payPageUrl(pending), amount };
+  }
+  const m = b.mandate;
+  let result = { captureId: `DEMO-MANDATE-${crypto.randomBytes(3).toString('hex').toUpperCase()}`, captureStatus: 'COMPLETED', fee: null, net: null };
+  if (!m.demo && paypalReady && !isDemoMoney(pending)) {
+    const business = businessOf(b);
+    result = await paypal.chargeVault({ bookingId: b.id, paymentId: pending.id, amount: pending.amount, tip, vaultId: m.vaultId, description: `Balance: ${b.service}, ${b.slotLabel}`, softDescriptor: business.descriptor || business.name });
+    if (result.captureStatus !== 'COMPLETED') {
+      store.addTimeline(b.id, `${agent} tried to pay ${usd(amount)} from the saved wallet but PayPal returned ${result.captureStatus || result.status}. The customer was asked to pay instead.`);
+      return { paid: false, reason: 'paypal_declined', check, approvalUrl: payPageUrl(pending), amount };
+    }
+  } else {
+    store.updatePayment(pending.id, { mode: 'demo', demo: true });
+  }
+  store.updateBooking(b.id, { mandate: { ...m, spent: round2((m.spent || 0) + amount) } });
+  completePayment(pending.id, { captureId: result.captureId, fee: result.fee, net: result.net, tip: tip || null, via: `${agent} (pre-approved limit)` });
+  store.addTimeline(b.id, `${agent} paid ${usd(amount)} (${usd(pending.amount)} balance${tip ? ` + ${usd(tip)} tip` : ''}) inside the ${usd(m.limit)} limit ${b.customerName} pre-approved. No new approval needed.${m.demo ? ' (Demo: simulated, no PayPal call.)' : ''}`);
+  store.logActivity(`${agent} paid ${b.customerName}'s ${usd(amount)} final bill inside their ${usd(m.limit)} pre-approved limit.`, { bookingId: b.id, kind: 'mandate_paid' });
+  return { paid: true, reason: 'within_limit', check, amount, captureId: result.captureId, booking: store.getBooking(b.id) };
+}
 
 // ---------------- reminders ----------------
 export async function remind(bookingId) {
@@ -478,7 +690,26 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
     const back = round2(part + tipPart);
     let refundId = demoRef;
     let refundStatus = 'COMPLETED';
-    if (isDemoMoney(p)) {
+    if (p.hold?.status === 'authorized') {
+      // Never charged: a full refund of a held deposit voids the authorization; a partial one captures only what
+      // the business keeps and releases the rest.
+      if (part + 0.001 >= room) {
+        refundId = await voidHold(p);
+        refundStatus = 'VOIDED';
+      } else {
+        const fresh = store.findPayment(p.id).payment;
+        store.updatePayment(p.id, { refund: { amount: round2(already + part), tip: 0, refundId: 'RELEASED', status: 'RELEASED', at: new Date().toISOString() } });
+        const ok = await captureHold(p.id, `Kept ${usd(room - part)} of the hold; released ${usd(part)}`);
+        if (!ok) store.updatePayment(p.id, { refund: fresh.refund || null });
+        refundId = ok ? 'RELEASED' : 'FAILED';
+        refundStatus = ok ? 'RELEASED' : 'FAILED';
+        if (ok) {
+          refunds.push({ amount: part, tip: 0, refundId, status: refundStatus, method: 'PayPal hold', released: true });
+          toRefund = round2(toRefund - part);
+          continue;
+        }
+      }
+    } else if (isDemoMoney(p)) {
       refundId = demoRef;
     } else if (p.mode === 'paypal' && p.captureId && paypalReady) {
       // The capture holds the amount plus the tip. Refund the whole capture only when all of it goes back.
@@ -490,7 +721,8 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
       refundId = 'OUTSIDE-PAYPAL';
     }
     store.updatePayment(p.id, { refund: { amount: round2(already + part), tip: round2(tipAlready + tipPart), refundId, status: refundStatus, at: new Date().toISOString() } });
-    refunds.push({ amount: part, tip: tipPart, refundId, status: refundStatus, method: p.via === 'paypal' || p.mode === 'paypal' ? 'PayPal' : p.method || 'original payment' });
+    if (refundStatus === 'FAILED') continue;
+    refunds.push({ amount: part, tip: tipPart, refundId, status: refundStatus, method: p.via === 'paypal' || p.mode === 'paypal' ? 'PayPal' : p.method || 'original payment', released: refundStatus === 'VOIDED' });
     toRefund = round2(toRefund - part);
   }
   const jobBack = sum(refunds.map((r) => r.amount));
@@ -504,17 +736,26 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
   // What went back, in plain words: "$114 plus the $500 tip ($614 in all)" or "$50 of the $114 paid; the $20 tip was not refunded".
   const what = tipBack > 0 ? `${usd(jobBack)} plus the ${usd(tipBack)} tip (${usd(total)} in all)` : !full && t.paid - jobBack > 0.001 ? `${usd(jobBack)} of the ${usd(t.paid)} paid` : usd(total);
   const tipNote = !full && t.tips > 0 ? ` The ${usd(t.tips)} tip was not refunded.` : '';
-  store.addTimeline(b.id, `Refunded ${what}${reason ? ` (${reason})` : ''}.${tipNote} PayPal refund ${ref}.`);
+  store.addTimeline(b.id, allReleasedLine(refunds, what, reason, tipNote, ref));
+  const allReleased = refunds.length > 0 && refunds.every((r) => r.released);
   if (notify) {
     store.addMessage(
       b.leadId,
       'assistant',
-      `Your refund of ${what} is on its way back to the account you paid with.${tipNote} Reference: ${ref}. It shows in PayPal right away; if you paid by card, your bank can take a few business days to post it.`,
+      allReleased
+        ? `Done: the ${usd(total)} hold on your PayPal is released. You were never charged for it.${tipNote} Reference: ${ref}.`
+        : `Your refund of ${what} is on its way back to the account you paid with.${tipNote} Reference: ${ref}. It shows in PayPal right away; if you paid by card, your bank can take a few business days to post it.`,
       { kind: 'refund' },
     );
   }
+  if (fullyRefunded) endMandate(b.id, 'revoked', 'The booking was refunded.');
   store.logActivity(`Refunded ${what} to ${b.customerName}${reason ? ` (${reason})` : ''}.${tipNote}`, { bookingId: b.id, kind: 'refund' });
-  return { booking: store.getBooking(b.id), refunded: total, jobRefunded: jobBack, tipRefunded: tipBack, reference: ref };
+  return { booking: store.getBooking(b.id), refunded: total, jobRefunded: jobBack, tipRefunded: tipBack, reference: ref, released: allReleased };
+}
+
+function allReleasedLine(refunds, what, reason, tipNote, ref) {
+  if (refunds.length && refunds.every((r) => r.released)) return `Released the deposit hold (${what}) without charging anything${reason ? ` (${reason})` : ''}. PayPal ${ref}.`;
+  return `Refunded ${what}${reason ? ` (${reason})` : ''}.${tipNote} PayPal refund ${ref}.`;
 }
 
 // Customer cancels. The policy they saw at booking is applied automatically.
@@ -540,7 +781,9 @@ export async function customerCancel(bookingId, { notify = true } = {}) {
     await offerToWaitlist(b.presetId, b.slotStart, b.slotLabel);
     return { outcome: 'refunded', ...r };
   }
-  store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), depositKept: t.depositPaid });
+  await captureHolds(b, 'Late cancel: the deposit is kept per the terms');
+  store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), depositKept: totals(store.getBooking(b.id)).depositPaid });
+  endMandate(b.id, 'revoked', 'The booking was canceled.');
   store.addTimeline(b.id, `Customer canceled after the free-cancel deadline (${freeCancelLabel(b)}). Deposit of ${usd(t.depositPaid)} kept per the terms shown at booking.`);
   store.logActivity(`${b.customerName} canceled late. ${usd(t.depositPaid)} deposit kept per policy.`, { bookingId: b.id, kind: 'late_cancel' });
   await offerToWaitlist(b.presetId, b.slotStart, b.slotLabel);
@@ -612,10 +855,13 @@ export async function releaseStaleHolds(maxMinutes = Number(process.env.HOLD_MIN
   return stale.length;
 }
 
-export function markNoShow(bookingId) {
-  const b = store.getBooking(bookingId);
+export async function markNoShow(bookingId) {
+  let b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
   if (!['confirmed', 'held'].includes(b.status)) throw new Error(`${b.customerName}'s booking is ${(STATUS_WORDS[b.status] || b.status).toLowerCase()}, so it can't be marked a no-show.`);
+  // A held deposit is captured now: a no-show is exactly what the hold was for.
+  b = await captureHolds(b, 'No-show: the deposit is kept per the terms');
+  endMandate(b.id, 'revoked', 'No-show.');
   const kept = totals(b).depositPaid;
   store.updateBooking(b.id, { status: 'no_show', noShowAt: new Date().toISOString(), depositKept: kept });
   store.addTimeline(b.id, `Marked no-show. Deposit of ${usd(kept)} kept per the terms shown at booking.`);
@@ -640,6 +886,13 @@ export async function reschedule(bookingId, newSlotStart, { notify = true } = {}
     rescheduledFrom: old.label,
   });
   let nb = store.getBooking(b.id);
+  // A deposit hold only lasts PayPal's 3-day honor period. If the new time is past it, the hold is captured now and
+  // becomes a regular deposit (still free to cancel per the terms; a free cancel then refunds it).
+  for (const p of nb.payments.filter((x) => x.status === 'completed' && x.hold?.status === 'authorized')) {
+    const jobEnd = Date.parse(newSlotStart) + (business.slotMinutes || 120) * 60000;
+    if (jobEnd + BILL_MARGIN_HOURS * HOUR > Date.parse(p.hold.honorUntil)) await captureHold(p.id, "Moved past PayPal's 3-day hold window, so the deposit was captured as a regular deposit");
+  }
+  nb = store.getBooking(b.id);
   // Back to a held booking whose deposit link was turned off (the business canceled before it was paid): send a fresh one.
   let freshLink = null;
   if (nextStatus === 'held' && !nb.payments.some((p) => p.kind === 'deposit' && p.status === 'pending')) {
@@ -694,9 +947,11 @@ export function decideChange(bookingId, changeId, approve, { notify = true } = {
 
 // ---------------- final balance, tips, cash, splitting, someone else paying ----------------
 export async function markCompleted(bookingId) {
-  const b = store.getBooking(bookingId);
+  let b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
   if (!['confirmed', 'held'].includes(b.status)) throw new Error(`${b.customerName}'s booking is ${STATUS_WORDS[b.status] || b.status}.`);
+  // The held deposit is applied to the final bill: captured now, so the balance link is the rest.
+  b = await captureHolds(b, 'Applied to the final bill');
   const t = totals(b);
   store.updateBooking(b.id, { status: t.due > 0 ? 'completed' : 'paid_in_full', completedAt: new Date().toISOString() });
   store.addTimeline(b.id, `Job marked done. Balance ${usd(t.due)}.`);
@@ -824,7 +1079,8 @@ export async function sendRebookNudges({ force = false, presetId = null } = {}) 
 // PayPal's fees) goes to the owner's PayPal email through Payouts. In demo mode it is recorded without moving money.
 // Only money that actually came in through PayPal is paid out: cash or check recorded by the owner never is.
 // Demo money counts only on a server with no PayPal keys (where the payout is recorded, not sent).
-const viaPayPal = (p) => (isDemoMoney(p) ? !paypalReady : p.mode === 'paypal');
+// A deposit still on hold (authorized, not captured) is never paid out.
+const viaPayPal = (p) => (p.hold && p.hold.status !== 'captured' ? false : isDemoMoney(p) ? !paypalReady : p.mode === 'paypal');
 export async function payoutForBooking(bookingId) {
   const b = store.getBooking(bookingId);
   if (!b || b.payout || b.status !== 'paid_in_full') return null;
@@ -851,7 +1107,10 @@ export function moneySummary({ days = 7, presetId = null } = {}) {
   const since = Date.now() - days * 86400000;
   const all = store.listBookings().filter(ofBusiness(presetId));
   const payments = all.flatMap((b) => b.payments.map((p) => ({ ...p, booking: b })));
-  const done = payments.filter((p) => (p.status === 'completed' || p.refund) && Date.parse(p.completedAt || p.createdAt) >= since);
+  const isHeld = (p) => p.hold && p.hold.status !== 'captured';
+  const onHold = sum(payments.filter((p) => p.status === 'completed' && p.hold?.status === 'authorized').map((p) => p.amount - (p.refund?.amount || 0)));
+  // Money in counts what was captured; a deposit on hold is shown on its own (it isn't in the account yet).
+  const done = payments.filter((p) => (p.status === 'completed' || p.refund) && !isHeld(p) && Date.parse(p.completedAt || p.createdAt) >= since);
   const gross = sum(done.map((p) => p.amount + (p.tip || 0)));
   const fees = sum(done.map((p) => p.fee || 0));
   const refunds = sum(done.map((p) => (p.refund?.amount || 0) + (p.refund?.tip || 0)));
@@ -859,7 +1118,7 @@ export function moneySummary({ days = 7, presetId = null } = {}) {
   const pending = sum(payments.filter((p) => p.status === 'pending').map((p) => p.amount));
   const kept = sum(all.filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
   const paidOut = sum(all.filter((b) => b.payout && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
-  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, depositsKeptFromLateCancels: kept, paidOut };
+  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, onHold, depositsKeptFromLateCancels: kept, paidOut };
 }
 
 // ---------------- dispute evidence ----------------
@@ -871,11 +1130,91 @@ export function evidence(bookingId) {
     booking: { id: b.id, customer: b.customerName, service: `${b.service} (${b.size})`, appointment: b.slotLabel, status: STATUS_WORDS[b.status] || b.status },
     agreedTerms: b.timeline.find((x) => x.text.startsWith('Terms shown'))?.text,
     totals: totals(b),
-    payments: b.payments.map((p) => ({ label: p.label, amount: p.amount, tip: p.tip || 0, status: p.status, via: p.via || p.mode, paypalOrderId: p.orderId || null, paypalCaptureId: p.captureId || null, refund: p.refund || null, at: p.completedAt || p.createdAt })),
+    payments: b.payments.map((p) => ({ label: p.label, amount: p.amount, tip: p.tip || 0, status: p.status, via: p.via || p.mode, paypalOrderId: p.orderId || null, paypalCaptureId: p.captureId || null, paypalAuthorizationId: p.hold?.authorizationId || null, hold: p.hold?.status || null, invoice: p.invoice?.id || null, refund: p.refund || null, at: p.completedAt || p.createdAt })),
+    assistantLimit: b.mandate ? { limit: b.mandate.limit, spent: b.mandate.spent, status: b.mandate.status, grantedAt: b.mandate.grantedAt, scope: b.mandate.scope } : null,
+    disputes: b.disputes || [],
     changes: b.changes,
     timeline: b.timeline,
     conversation: (lead?.messages || []).map((m) => ({ at: m.at, from: m.role === 'customer' ? b.customerName : 'Business (AI)', text: m.text })),
   };
+}
+
+// The evidence file as a PDF, the format PayPal's dispute evidence upload accepts.
+export function evidencePdf(bookingId) {
+  const e = evidence(bookingId);
+  if (!e) return null;
+  const b = store.getBooking(bookingId);
+  const business = businessOf(b);
+  const lines = [
+    `# ${business.name}: booking record ${e.booking.id}`,
+    `Customer: ${e.booking.customer}. Service: ${e.booking.service}. Appointment: ${e.booking.appointment}. Status: ${e.booking.status}.`,
+    '',
+    '# Terms the customer saw before paying',
+    e.agreedTerms || '(not recorded)',
+    '',
+    '# Payments (PayPal IDs)',
+    ...e.payments.map((p) => `${p.label}: ${usd(p.amount)}${p.tip ? ` + ${usd(p.tip)} tip` : ''}, ${p.status}, via ${p.via || 'n/a'}. Order ${p.paypalOrderId || '-'}, capture ${p.paypalCaptureId || '-'}${p.paypalAuthorizationId ? `, authorization ${p.paypalAuthorizationId}` : ''}${p.refund ? `, refunded ${usd(p.refund.amount)} (${p.refund.refundId})` : ''}. ${p.at}`),
+    '',
+    '# Changes the customer approved or declined',
+    ...(e.changes.length ? e.changes.map((c) => `${c.description}: ${usd(c.amount)}, ${c.status}${c.decidedAt ? ` at ${c.decidedAt}` : ''}`) : ['None.']),
+    '',
+    '# Timeline',
+    ...e.timeline.map((t) => `${t.at}  ${t.text}`),
+    '',
+    '# Full conversation',
+    ...e.conversation.map((m) => `${m.at}  ${m.from}: ${m.text}`),
+  ];
+  return textPdf(lines, { title: `Booking record ${e.booking.id}` });
+}
+
+// A chargeback or dispute opened on a payment: the AI sends PayPal the evidence file right away (Disputes API
+// provide-evidence) and tells the owner. PayPal only takes evidence while the dispute shows a provide-evidence link;
+// if it doesn't yet, the file is kept ready and the owner is told so. demo: no PayPal call, labeled as simulated.
+const EVIDENCE_TYPE = { MERCHANDISE_OR_SERVICE_NOT_RECEIVED: 'PROOF_OF_FULFILLMENT', MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED: 'OTHER', UNAUTHORISED: 'OTHER' };
+export async function defendDispute(bookingId, { disputeId, reason = '', amount = null, demo = !paypalReady } = {}) {
+  const b = store.getBooking(bookingId);
+  if (!b) throw new Error('Booking not found.');
+  if ((b.disputes || []).some((d) => d.id === disputeId && ['evidence_sent', 'simulated'].includes(d.status))) return b;
+  const t = totals(b);
+  const terms = b.timeline.find((x) => x.text.startsWith('Terms shown'))?.text || '';
+  const notes = [
+    `${b.customerName} booked ${b.service} for ${b.slotLabel}${b.bookedBy ? ` (booked by their AI assistant ${b.bookedBy}; the customer approved the payment in PayPal themselves)` : ''}.`,
+    terms,
+    `Paid ${usd(t.paid)}${t.tips ? ` plus ${usd(t.tips)} tip` : ''}; status: ${STATUS_WORDS[b.status] || b.status}.`,
+    'The attached booking record has every PayPal ID, each approval, the timeline and the full conversation.',
+  ].join(' ');
+  const pdf = evidencePdf(b.id);
+  const evidenceType = EVIDENCE_TYPE[reason] || 'OTHER';
+  let status = 'simulated';
+  let detail = 'Demo mode: simulated, no PayPal call.';
+  if (!demo) {
+    try {
+      const d = await paypal.getDispute(disputeId);
+      const canSend = (d.links || []).some((l) => l.rel === 'provide_evidence' || /provide-evidence$/.test(l.href || ''));
+      if (canSend) {
+        await paypal.provideEvidence(disputeId, { evidenceType, notes, file: { name: `booking-${b.id}.pdf`, type: 'application/pdf', data: pdf } });
+        status = 'evidence_sent';
+        detail = `Sent to PayPal as ${evidenceType} evidence with the booking record PDF.`;
+      } else {
+        status = 'waiting_for_paypal';
+        detail = `PayPal isn't taking evidence on this dispute yet (status ${d.status || 'unknown'}). The file is ready on the booking record.`;
+      }
+    } catch (err) {
+      status = 'error';
+      detail = `PayPal refused the evidence (${err.message}). The file is ready on the booking record to send by hand.`;
+    }
+  }
+  const entry = { id: disputeId, reason, amount, status, evidenceType, at: new Date().toISOString(), detail };
+  store.updateBooking(b.id, { disputes: [...(b.disputes || []).filter((d) => d.id !== disputeId), entry] });
+  store.addTimeline(b.id, `PayPal dispute ${disputeId} opened (${reason || 'reason not given'}). ${detail}`);
+  const line =
+    status === 'evidence_sent'
+      ? `The AI defended your chargeback: ${b.customerName} opened a PayPal dispute, and the evidence file (terms, approvals, PayPal IDs, the full conversation) was sent to PayPal.`
+      : status === 'simulated'
+        ? `The AI defended your chargeback (demo: simulated, no PayPal call): ${b.customerName}'s dispute would get the evidence file (terms, approvals, PayPal IDs, the full conversation) sent to PayPal.`
+        : `Dispute opened on ${b.customerName}'s payment. ${detail}`;
+  store.logActivity(line, { bookingId: b.id, kind: 'dispute' });
+  return store.getBooking(b.id);
 }
 
 // ---------------- dashboard summary ----------------
@@ -916,6 +1255,12 @@ export async function handlePayPalEvent(event) {
   if (type === 'PAYMENT.CAPTURE.COMPLETED') {
     const [, paymentId] = String(r.custom_id || '').split(':');
     const found = store.findPayment(paymentId) || findPaymentByOrder(r?.supplementary_data?.related_ids?.order_id);
+    // The capture of a deposit hold (no-show or final bill) was recorded when this app captured it: only fill in fees.
+    if (found?.payment?.hold) {
+      const br = r.seller_receivable_breakdown || {};
+      if (found.payment.hold.captureId === r.id && br.paypal_fee && found.payment.fee == null) store.updatePayment(found.payment.id, { fee: Number(br.paypal_fee.value), net: br.net_amount ? Number(br.net_amount.value) : null });
+      return store.getBooking(found.booking.id);
+    }
     if (found) {
       const br = r.seller_receivable_breakdown || {};
       return completePayment(found.payment.id, { captureId: r.id, fee: br.paypal_fee ? Number(br.paypal_fee.value) : null, net: br.net_amount ? Number(br.net_amount.value) : null, tip: capturedTip(found.payment, r) });
@@ -936,10 +1281,7 @@ export async function handlePayPalEvent(event) {
   if (type === 'CUSTOMER.DISPUTE.CREATED') {
     const txn = r?.disputed_transactions?.[0];
     const found = store.findPaymentBy('captureId', txn?.seller_transaction_id);
-    if (found) {
-      store.addTimeline(found.booking.id, `PayPal dispute opened (${r.reason || 'reason not given'}). Evidence file is ready.`);
-      store.logActivity(`Dispute opened on ${found.booking.customerName}'s payment. The evidence file is ready to send.`, { bookingId: found.booking.id, kind: 'dispute' });
-    }
+    if (found) return defendDispute(found.booking.id, { disputeId: r.dispute_id || r.id, reason: r.reason || '', amount: Number(r?.dispute_amount?.value) || null });
   }
   return null;
 }

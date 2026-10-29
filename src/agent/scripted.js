@@ -288,6 +288,7 @@ async function runAction(action, b, amount) {
   if (action === 'refund') {
     const r = await B.refund(b.id, { amount: amount ?? null, reason: 'Owner request' });
     const demo = String(r.reference).startsWith('DEMO-') ? ' (demo money: settled here, no PayPal call)' : '';
+    if (r.released) return `Released ${b.customerName}'s ${B.usd(r.refunded)} deposit hold in PayPal; they were never charged. Reference ${r.reference}${demo}.`;
     return `Refunded ${B.usd(r.refunded)} to ${b.customerName}${r.tipRefunded ? ` (including the ${B.usd(r.tipRefunded)} tip)` : ''}. Reference ${r.reference}${demo}.`;
   }
   if (action === 'done') {

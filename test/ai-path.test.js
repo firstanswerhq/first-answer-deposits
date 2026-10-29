@@ -112,7 +112,7 @@ test('owner AI: a refund the model calls "confirmed" on the first message is ref
   assert.equal(first, 'Refund $50 to Mike? Reply YES to send it back the way they paid, or NO.');
   assert.equal(B.totals(store.getBooking(booking.id)).refunded, 0, 'no money moved without a YES');
   const second = await B.withBusiness(biz, () => ownerCommand('yes'));
-  assert.match(second, /^Refunded \$50\. Reference DEMO-REFUND-/);
+  assert.match(second, /^Refunded \$50\. Reference DEMO-(REFUND|VOID)-/);
   assert.equal(store.getBooking(booking.id).status, 'refunded');
   // The owner chat history the model sees is this business's only.
   store.addOwnerMessage('owner', 'hvac secret', { presetId: 'hvac' });
