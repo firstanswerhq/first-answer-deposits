@@ -91,6 +91,8 @@ async function refresh() {
   const s = await api('/api/owner/state', { headers: hdr });
   lastState = s;
   $('#biz').innerHTML = s.presets.map((p) => `<option value="${escapeHtml(p.id)}" ${p.id === s.business.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+  // Starting over is off on the hosted demo unless the host turns it on: hide the button when it would only fail.
+  $('#reset').style.display = s.resetAllowed ? '' : 'none';
   $('#pp-badge').textContent = `PayPal: ${s.health.paypal}`;
   $('#ai-badge').textContent = `AI: ${s.health.ai}`;
   kpis(s.summary);

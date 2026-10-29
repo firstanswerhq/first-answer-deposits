@@ -254,7 +254,7 @@ export function cleanProfile(profile = {}) {
     services,
     deposit,
     payoutEmail: email,
-    brand: { color, logoUrl: /^https?:\/\/[^\s"'<>]+$/i.test(logo) ? logo.slice(0, 500) : '' },
+    brand: { color, logoUrl: cleanLogoUrl(logo) },
   };
 }
 
@@ -314,4 +314,10 @@ export async function profileFromText(text) {
   } catch {
     return null;
   }
+}
+
+// A logo link is shown on customer pages: http(s) only, no spaces, quotes or angle brackets, 500 characters at most.
+export function cleanLogoUrl(v) {
+  const logo = String(v || '').trim();
+  return /^https?:\/\/[^\s"'<>]+$/i.test(logo) ? logo.slice(0, 500) : '';
 }

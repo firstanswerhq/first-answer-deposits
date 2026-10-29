@@ -88,7 +88,8 @@ export async function scriptedCustomerReply(lead) {
       B.decideChange(booking.id, null, false);
       return "No problem, we'll leave it as is.";
     }
-    if (/refund/.test(t) && booking.status === 'needs_rebook') {
+    // We canceled on our side: "refund" or "cancel" both mean "send my money back" (never a cancel fee).
+    if (booking.status === 'needs_rebook' && (/refund/.test(t) || (/cancel/.test(t) && !isQuestion))) {
       const r = await B.refund(booking.id, { reason: 'Business canceled; customer chose a refund' });
       return `Done. ${B.usd(r.refunded)} is on its way back to you.`;
     }
@@ -99,7 +100,12 @@ export async function scriptedCustomerReply(lead) {
       return `Sure! Forward them this link. They can pay with their own PayPal, Venmo or card (no account needed), and you'll both see the confirmation: ${r.link}`;
     }
     if (/cancel/.test(t)) {
-      const r = await B.customerCancel(booking.id);
+      let r;
+      try {
+        r = await B.customerCancel(booking.id);
+      } catch (err) {
+        return err.message; // e.g. the job is already done: a plain-words answer, not a failed send
+      }
       if (r.outcome === 'kept_deposit') return `Canceled. Since it's past the free-cancel time (${r.deadline}), the ${B.usd(r.kept)} deposit is kept, as agreed at booking. Want to reschedule instead next time? Rescheduling is always free.`;
       return 'All canceled. Text us anytime to book again.';
     }
@@ -210,11 +216,11 @@ export async function scriptedOwnerReply(text) {
       return `Told ${b.customerName} we have to cancel and offered new times or a full refund.`;
     }
     if (/(how did we do|summary|this week|money)/.test(t)) {
-      const m = B.moneySummary({ days: 7 });
+      const m = B.moneySummary({ days: 7, presetId: current.id });
       return `Last 7 days: ${B.usd(m.gross)} in, ${B.usd(m.fees)} PayPal fees, ${B.usd(m.refunds)} refunded, ${B.usd(m.net)} net. ${B.usd(m.stillOwed)} still owed.`;
     }
     if (/rebook|repeat/.test(t)) {
-      const r = await B.sendRebookNudges({ force: true });
+      const r = await B.sendRebookNudges({ force: true, presetId: current.id });
       return r.nudged.length ? `Sent rebooking texts to ${r.nudged.join(', ')}.` : 'Nobody is due for a rebooking text yet.';
     }
   } catch (err) {

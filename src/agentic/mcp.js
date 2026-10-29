@@ -10,6 +10,7 @@ import * as B from '../bookings.js';
 import { localDate } from '../slots.js';
 import { findService } from '../business.js';
 import { config } from '../config.js';
+import { makeRateLimiter } from '../client-ip.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 export const HOLD_MINUTES = () => Number(process.env.HOLD_MINUTES || 120);
@@ -298,6 +299,11 @@ export function buildServer(business, { base = config.publicUrl } = {}) {
     },
     async ({ booking_id, booking_key }) => {
       const b = requireBooking(business, booking_id, booking_key);
+      // The business already canceled this time: canceling now means the customer takes the full refund.
+      if (b.status === 'needs_rebook') {
+        const rf = await B.refund(b.id, { reason: 'Business canceled; customer chose a refund', notify: true });
+        return ok({ canceled: true, outcome: 'refunded_in_full', refunded: rf.refunded, kept: 0, ...bookingView(rf.booking), message: `Canceled and ${B.usd(rf.refunded)} refunded in full through PayPal (reference ${rf.reference}), since the business canceled this time.` });
+      }
       const r = await B.customerCancel(b.id, { notify: true });
       const message =
         r.outcome === 'released' ? 'Canceled. Nothing was paid, so nothing is owed.' : r.outcome === 'refunded' ? `Canceled and ${B.usd(r.refunded)} refunded through PayPal (reference ${r.reference}).` : `Canceled after the free-cancel deadline (${r.deadline}). The ${B.usd(r.kept)} deposit is kept per the terms shown at booking.`;
@@ -309,18 +315,9 @@ export function buildServer(business, { base = config.publicUrl } = {}) {
 }
 
 // ---------- HTTP plumbing ----------
-const hits = new Map();
-function rateLimit(max, windowMs) {
-  return (req, res, next) => {
-    const now = Date.now();
-    const list = (hits.get(req.ip) || []).filter((t) => now - t < windowMs);
-    if (list.length >= max) return res.status(429).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Too many requests. Try again in a minute.' }, id: null });
-    list.push(now);
-    hits.set(req.ip, list);
-    if (hits.size > 5000) hits.clear();
-    next();
-  };
-}
+// Keyed on the visitor, not the host's proxy (see client-ip.js). One bucket for all MCP calls.
+const mcpLimiter = makeRateLimiter({ onLimit: (req, res) => res.status(429).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Too many requests. Try again in a minute.' }, id: null }) });
+const rateLimit = (max, windowMs) => mcpLimiter(max, windowMs, () => 'mcp');
 
 // Remote assistants (Claude connectors, ChatGPT, browser agents) call from other origins.
 export function cors(req, res, next) {

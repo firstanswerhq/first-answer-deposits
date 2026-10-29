@@ -65,14 +65,13 @@ test('a set-up business needs its owner key; demo businesses stay open', async (
   assert.equal((await call('POST', '/api/owner/preset', { body: { presetId: business.id }, key: 'wrong-key' })).status, 403);
   assert.equal((await call('POST', '/api/owner/preset', { body: { presetId: business.id }, key: ownerKey })).status, 200);
 
-  // Payout email and connections: only with the key.
+  // Payout email and connections: only with the key. Without it the request lands on the read-only demo business.
   const hijack = await call('POST', '/api/owner/connections', { body: { payoutEmail: 'thief@evil.example' } });
-  assert.equal(hijack.status, 403);
+  assert.equal(hijack.status, 400);
   assert.equal(store.getBusiness(business.id).payoutEmail, 'owner@keyed.example');
   const peek = await call('GET', '/api/owner/connections');
-  assert.equal(peek.data.locked, true);
-  assert.equal(peek.data.payoutEmail, '');
-  assert.equal(peek.data.webhookSecret, '');
+  assert.equal(peek.data.business.id, 'cleaning', 'a stranger sees the demo business, not the keyed one');
+  assert.ok(!JSON.stringify(peek.data).includes('keyed.example'));
 
   const set = await call('POST', '/api/owner/connections', { key: ownerKey, body: { payoutEmail: 'new@keyed.example', webhookUrl: 'https://1.1.1.1/hook' } });
   assert.equal(set.status, 200);
@@ -94,7 +93,8 @@ test('a set-up business needs its owner key; demo businesses stay open', async (
   assert.equal((await call('POST', `/api/owner/bookings/${booking.id}/refund`, { body: {} })).status, 403);
   assert.equal((await call('POST', `/api/owner/bookings/${booking.id}/cash`, { body: { amount: 40 } })).status, 403);
   assert.equal((await call('GET', `/api/evidence/${booking.id}`)).status, 403);
-  assert.equal((await call('POST', '/api/owner/text', { body: { text: 'refund Zed' } })).status, 403);
+  // Without the key the owner AI runs for the demo business, which can't reach the keyed business's customers.
+  assert.equal((await call('POST', '/api/owner/text', { body: { text: 'refund Zed' } })).status, 200);
   assert.equal(B.totals(store.getBooking(booking.id)).refunded, 0);
 
   // From an open demo business, the owner AI can't reach the keyed business's customers either.

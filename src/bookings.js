@@ -2,6 +2,7 @@
 // Customer AI, owner AI, dashboard buttons and PayPal webhooks all go through here,
 // so the calendar and the money can never disagree.
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { presets, depositFor, priceFor } from './business.js';
 import * as store from './store.js';
 import * as paypal from './paypal.js';
@@ -32,9 +33,17 @@ export function businessById(id) {
 export function listAllBusinesses() {
   return [...Object.values(presets), ...store.listBusinesses()];
 }
-export function currentBusiness() {
-  return businessById(store.getSettings().presetId) || presets.cleaning;
+// The owner page works on one business at a time (the saved setting). A request can be pinned to another
+// business with withBusiness(), e.g. a visitor without the owner key of a set-up business gets the demo one.
+const businessScope = new AsyncLocalStorage();
+export function withBusiness(business, fn) {
+  return businessScope.run(business, fn);
 }
+export function currentBusiness() {
+  return businessScope.getStore() || businessById(store.getSettings().presetId) || presets.cleaning;
+}
+// True when the booking belongs to that business id (or no id is given).
+const ofBusiness = (presetId) => (b) => !presetId || businessOf(b).id === presetId;
 export function businessOf(x) {
   return (x && businessById(x.presetId)) || currentBusiness();
 }
@@ -337,8 +346,8 @@ export async function remind(bookingId) {
   return store.getBooking(bookingId);
 }
 
-export function owing() {
-  return store.listBookings().filter((b) => ['held', 'completed'].includes(b.status) && b.payments.some((p) => p.status === 'pending'));
+export function owing({ presetId = null } = {}) {
+  return store.listBookings().filter(ofBusiness(presetId)).filter((b) => ['held', 'completed'].includes(b.status) && b.payments.some((p) => p.status === 'pending'));
 }
 
 // ---------------- refunds and cancellations ----------------
@@ -638,9 +647,9 @@ export async function offerToWaitlist(presetId, slotStart, slotLabel) {
 const firstName = (name) => String(name || '').trim().split(/\s+/)[0] || 'there';
 
 // After a paid-in-full job, text the customer when it's time to book again.
-export async function sendRebookNudges({ force = false } = {}) {
+export async function sendRebookNudges({ force = false, presetId = null } = {}) {
   const nudged = [];
-  for (const b of store.listBookings().filter((x) => x.status === 'paid_in_full' && !x.rebookNudgedAt)) {
+  for (const b of store.listBookings().filter(ofBusiness(presetId)).filter((x) => x.status === 'paid_in_full' && !x.rebookNudgedAt)) {
     const business = businessOf(b);
     const dueAt = Date.parse(b.slotStart) + (business.rebookDays || 30) * 86400000;
     if (!force && Date.now() < dueAt) continue;
@@ -687,17 +696,18 @@ export async function payoutForBooking(bookingId) {
 }
 
 // ---------------- owner money view ----------------
-export function moneySummary({ days = 7 } = {}) {
+export function moneySummary({ days = 7, presetId = null } = {}) {
   const since = Date.now() - days * 86400000;
-  const payments = store.listBookings().flatMap((b) => b.payments.map((p) => ({ ...p, booking: b })));
+  const all = store.listBookings().filter(ofBusiness(presetId));
+  const payments = all.flatMap((b) => b.payments.map((p) => ({ ...p, booking: b })));
   const done = payments.filter((p) => (p.status === 'completed' || p.refund) && Date.parse(p.completedAt || p.createdAt) >= since);
   const gross = sum(done.map((p) => p.amount + (p.tip || 0)));
   const fees = sum(done.map((p) => p.fee || 0));
   const refunds = sum(done.map((p) => p.refund?.amount || 0));
   const tips = sum(done.map((p) => p.tip || 0));
   const pending = sum(payments.filter((p) => p.status === 'pending').map((p) => p.amount));
-  const kept = sum(store.listBookings().filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
-  const paidOut = sum(store.listBookings().filter((b) => b.payout && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
+  const kept = sum(all.filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
+  const paidOut = sum(all.filter((b) => b.payout && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
   return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, depositsKeptFromLateCancels: kept, paidOut };
 }
 
@@ -718,21 +728,33 @@ export function evidence(bookingId) {
 }
 
 // ---------------- dashboard summary ----------------
-export function summary() {
-  const bookings = store.listBookings();
-  const leads = store.listLeads();
+// presetId: count only that business (the owner page passes the one it is showing).
+export function summary({ presetId = null } = {}) {
+  const bookings = store.listBookings().filter(ofBusiness(presetId));
+  const leads = store.listLeads().filter((l) => !presetId || businessOf(l).id === presetId);
   const replies = leads.map((l) => l.firstReplyMs).filter((x) => typeof x === 'number');
   return {
     leads: leads.length,
     avgFirstReplySec: replies.length ? Math.round(sum(replies) / replies.length / 100) / 10 : null,
     held: bookings.filter((b) => b.status === 'held').length,
     confirmed: bookings.filter((b) => b.status === 'confirmed').length,
-    owing: owing().length,
-    money: moneySummary({ days: 30 }),
+    owing: owing({ presetId }).length,
+    money: moneySummary({ days: 30, presetId }),
   };
 }
 
 // ---------------- PayPal webhooks ----------------
+// The tip on a captured order, so the payout is right even when the webhook arrives before the return page.
+// First the tip saved with the order that was captured; else what was captured above the amount owed.
+export function capturedTip(payment, resource = {}) {
+  const orderId = resource?.supplementary_data?.related_ids?.order_id;
+  const saved = (payment.orders || []).find((o) => o.id === orderId);
+  if (saved && saved.tip !== undefined) return clampTip(saved.tip) || null;
+  const captured = Number(resource?.amount?.value);
+  if (!Number.isFinite(captured)) return null;
+  return clampTip(captured - Number(payment.amount || 0)) || null;
+}
+
 export async function handlePayPalEvent(event) {
   const type = event?.event_type || '';
   const r = event?.resource || {};
@@ -745,7 +767,7 @@ export async function handlePayPalEvent(event) {
     const found = store.findPayment(paymentId) || findPaymentByOrder(r?.supplementary_data?.related_ids?.order_id);
     if (found) {
       const br = r.seller_receivable_breakdown || {};
-      return completePayment(found.payment.id, { captureId: r.id, fee: br.paypal_fee ? Number(br.paypal_fee.value) : null, net: br.net_amount ? Number(br.net_amount.value) : null });
+      return completePayment(found.payment.id, { captureId: r.id, fee: br.paypal_fee ? Number(br.paypal_fee.value) : null, net: br.net_amount ? Number(br.net_amount.value) : null, tip: capturedTip(found.payment, r) });
     }
   }
   if (type === 'PAYMENT.CAPTURE.DENIED' || type === 'PAYMENT.CAPTURE.DECLINED') {

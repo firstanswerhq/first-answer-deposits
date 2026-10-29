@@ -155,7 +155,7 @@ function ownerTools(business) {
     money_summary: tool({
       description: 'Money in, PayPal fees, refunds, tips, net, and what is still owed, for the last N days.',
       inputSchema: z.object({ days: z.number().int().min(1).max(365).default(7) }),
-      execute: safe(async ({ days }) => B.moneySummary({ days })),
+      execute: safe(async ({ days }) => B.moneySummary({ days, presetId: B.currentBusiness().id })),
     }),
     evidence_file: tool({
       description: 'Get the dispute evidence file for a booking: terms agreed, payments, changes, messages.',
@@ -165,7 +165,7 @@ function ownerTools(business) {
     send_rebook_nudges: tool({
       description: 'Text past customers who are due to book again (repeat business).',
       inputSchema: z.object({}),
-      execute: safe(async () => B.sendRebookNudges({ force: true })),
+      execute: safe(async () => B.sendRebookNudges({ force: true, presetId: B.currentBusiness().id })),
     }),
   };
 }

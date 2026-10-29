@@ -5,7 +5,7 @@ import { config, paypalReady, aiReady } from './config.js';
 import * as store from './store.js';
 import * as B from './bookings.js';
 import * as paypal from './paypal.js';
-import { presets } from './business.js';
+import { presets, defaultPresetId } from './business.js';
 import { replyToCustomer } from './agent/customer.js';
 import { ownerCommand } from './agent/owner.js';
 import { modelLabel, checkModel, aiStatus } from './agent/model.js';
@@ -15,9 +15,12 @@ import { seedSampleDay } from './seed.js';
 import { mountAgentic } from './agentic/index.js';
 import { checkPublicUrl } from './safe-fetch.js';
 import { newOwnerKey, hashKey, ownerKeyOk, credsFrom, resetAllowed, maskSecret } from './owner-auth.js';
+import { makeRateLimiter } from './client-ip.js';
+import { cleanLogoUrl } from './setup.js';
 
 const app = express();
-// Render (and most hosts) sit behind one proxy: trust it so req.ip is the visitor, not the proxy, for rate limits.
+// Render (and most hosts) sit behind one proxy: trust it. On Render that proxy is Cloudflare, so rate limits
+// key on Cloudflare's visitor header instead (see client-ip.js).
 app.set('trust proxy', 1);
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -43,18 +46,7 @@ mountAgentic(app);
 app.use(express.static(pub, { extensions: ['html'] }));
 
 // ---------- small helpers ----------
-const hits = new Map();
-function rateLimit(max, windowMs) {
-  return (req, res, next) => {
-    const key = `${req.ip}:${req.baseUrl}${req.route?.path || ''}`;
-    const now = Date.now();
-    const list = (hits.get(key) || []).filter((t) => now - t < windowMs);
-    if (list.length >= max) return res.status(429).json({ error: 'Too many messages, give it a minute.' });
-    list.push(now);
-    hits.set(key, list);
-    next();
-  };
-}
+const rateLimit = makeRateLimiter();
 const cleanText = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
 const ownerOnly = (req, res, next) => {
   if (!config.ownerPasscode) return next();
@@ -63,6 +55,15 @@ const ownerOnly = (req, res, next) => {
 };
 // A business set up at /setup is managed only with its owner key (see owner-auth.js); demo businesses stay open.
 const denyOwner = (res) => res.status(403).json({ error: 'This business belongs to its owner. Open the owner page with the owner link from setup.' });
+// One visitor opening their own set-up business must not take the owner page over for everyone: a caller
+// without that business's owner key works on the default demo business for this request.
+const ownerScope = (req, res, next) => {
+  const current = B.currentBusiness();
+  if (current.custom && !ownerKeyOk(current, credsFrom(req))) return B.withBusiness(presets[defaultPresetId], next);
+  next();
+};
+// Owner action results never carry a booking's manage key.
+const noSecrets = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x, (k, v) => (k === 'secret' ? undefined : v))));
 const ownerOfCurrent = (req, res, next) => (ownerKeyOk(B.currentBusiness(), credsFrom(req)) ? next() : denyOwner(res));
 const ownerOfBooking = (req, res, next) => {
   const b = store.getBooking(String(req.params.id || req.params.bookingId || ''));
@@ -127,7 +128,8 @@ app.get('/api/health', (req, res) => {
 
 // ---------- customer text thread ----------
 app.post('/api/text/start', wrap(async (req, res) => {
-  const presetId = B.businessById(req.body.presetId) ? req.body.presetId : store.getSettings().presetId;
+  // No business named: the default demo one, never whichever business someone opened last.
+  const presetId = B.businessById(req.body.presetId) ? req.body.presetId : defaultPresetId;
   const lead = store.createLead({ channel: req.body.channel || 'text', presetId, phone: req.body.phone || '' });
   res.json({ leadId: lead.id, business: B.businessById(presetId).name, brand: brandOf(B.businessById(presetId)) });
 }));
@@ -261,6 +263,7 @@ app.get('/calendar/:bizId.ics', (req, res) => {
   res.set({ 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `inline; filename="${business.id}.ics"`, 'Cache-Control': 'no-cache' });
   res.send(connect.calendarFor(business));
 });
+app.use(['/api/owner', '/api/evidence'], ownerScope);
 app.get('/api/owner/connections', ownerOnly, (req, res) => {
   const business = B.currentBusiness();
   // A set-up business's private links and payout email are shown only to its owner. The webhook signing
@@ -282,7 +285,6 @@ app.get('/api/owner/connections', ownerOnly, (req, res) => {
 app.post('/api/owner/connections', ownerOnly, ownerOfCurrent, wrap(async (req, res) => {
   const business = B.currentBusiness();
   if (!business.custom) return res.status(400).json({ error: 'The demo businesses are read-only. Set up your own at /setup to connect apps.' });
-  const url = (v) => (v && /^https?:\/\//.test(String(v)) ? String(v).trim().slice(0, 500) : '');
   // These two links are fetched by the server, so they must be https and point at the public internet.
   const fetched = {};
   for (const [field, label] of [['busyCalendarUrl', 'busy calendar'], ['webhookUrl', 'webhook']]) {
@@ -302,7 +304,7 @@ app.post('/api/owner/connections', ownerOnly, ownerOfCurrent, wrap(async (req, r
     busyCalendarUrl: fetched.busyCalendarUrl,
     webhookUrl: fetched.webhookUrl,
     payoutEmail: String(req.body.payoutEmail || '').trim().slice(0, 120),
-    brand: { color, logoUrl: url(req.body.logoUrl) },
+    brand: { color, logoUrl: cleanLogoUrl(req.body.logoUrl) },
   };
   // A new webhook address gets a new signing secret, shown in full this one time.
   const freshSecret = patch.webhookUrl && (!business.webhookSecret || patch.webhookUrl !== business.webhookUrl);
@@ -318,7 +320,8 @@ app.get('/api/owner/state', ownerOnly, (req, res) => {
   res.json({
     business: { id: business.id, name: business.name, trade: business.trade },
     presets: B.listAllBusinesses().map((p) => ({ id: p.id, name: p.name, trade: p.trade, custom: !presets[p.id] })),
-    summary: B.summary(),
+    summary: B.summary({ presetId: business.id }),
+    resetAllowed: resetAllowed(),
     bookings: store.listBookings().filter(visible).slice(0, 50).map(publicBooking),
     leads: store.listLeads().filter(visible).slice(0, 50).map((l) => ({ id: l.id, name: l.name, status: l.status, presetId: l.presetId, needsOwner: Boolean(l.needsOwner), lastMessage: l.messages.at(-1) || null, firstReplyMs: l.firstReplyMs })),
     ownerThread: store.listOwnerMessages().filter(visible),
@@ -338,7 +341,7 @@ app.post('/api/owner/text', ownerOnly, ownerOfCurrent, rateLimit(40, 10 * 60 * 1
 // Owner actions throw plain-words errors (nothing owed, bad amount...): those are the owner's to fix, so 400.
 const ownerAction = (fn) => async (req, res) => {
   try {
-    res.json({ ok: true, result: await fn(req) });
+    res.json({ ok: true, result: noSecrets(await fn(req)) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -349,7 +352,7 @@ app.post('/api/owner/bookings/:id/done', ownerOnly, ownerOfBooking, ownerAction(
 app.post('/api/owner/bookings/:id/cancel', ownerOnly, ownerOfBooking, ownerAction((req) => B.businessCancel(req.params.id, req.body.reason || '')));
 app.post('/api/owner/bookings/:id/release', ownerOnly, ownerOfBooking, ownerAction((req) => B.releaseHold(req.params.id, 'Released by the owner')));
 app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerOfBooking, ownerAction((req) => B.recordOutsidePayment(req.params.id, { amount: Number(req.body.amount), method: String(req.body.method || 'cash') })));
-app.post('/api/owner/rebook', ownerOnly, ownerAction(() => B.sendRebookNudges({ force: true })));
+app.post('/api/owner/rebook', ownerOnly, ownerOfCurrent, ownerAction(() => B.sendRebookNudges({ force: true, presetId: B.currentBusiness().id })));
 
 app.post('/api/owner/preset', ownerOnly, (req, res) => {
   const target = B.businessById(req.body.presetId);
