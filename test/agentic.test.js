@@ -193,7 +193,7 @@ test("the customer's scripted assistant books through MCP end to end and hands b
   assert.ok(r.approval, 'approval returned');
   assert.equal(r.approval.amount, 50);
   assert.match(r.approval.url, /\/p\/pay_/);
-  assert.match(r.reply, /can't pay for you/);
+  assert.match(r.reply, /can't pay the deposit for you/);
   assert.match(r.reply, /\$50/);
   assert.equal(r.endpoint, `${base}/mcp/cleaning`);
   const booking = store.getBooking(r.approval.bookingId);

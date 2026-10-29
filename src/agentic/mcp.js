@@ -57,7 +57,8 @@ export function businessInfo(business, base = config.publicUrl) {
       handler: 'PayPal',
       methods: PAYMENT_METHODS,
       account_needed: false,
-      who_pays: 'The human. Agents can hold a time but cannot pay. The deposit is approved by the customer on a PayPal checkout page.',
+      who_pays: 'The human approves the deposit on a PayPal checkout page; agents cannot pay it. After the job, an agent may pay the final bill with pay_balance only inside a limit the human pre-approved for that booking.',
+      deposit_hold: 'Deposits for jobs inside PayPal\'s 3-day honor period are authorized (held, not charged) and captured on the final bill or a no-show, voided on a free cancel. Later jobs are captured at booking.',
     },
     mcp_endpoint: mcpUrl(business, base),
   };

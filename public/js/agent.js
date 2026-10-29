@@ -1,5 +1,6 @@
 // Agent-to-agent demo: the customer talks to their own assistant (left); the assistant talks to the business
-// over MCP (right, live). When a time is held, the human gets one PayPal approval. The assistant never pays.
+// over MCP (right, live). When a time is held, the human gets one PayPal approval: the assistant never pays the
+// deposit. After the job it can pay the final bill, but only inside the limit the human set at the deposit.
 import { api, escapeHtml, linkify, $, money } from './common.js';
 
 const PRESETS = [

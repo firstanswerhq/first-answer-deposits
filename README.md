@@ -2,7 +2,7 @@
 
 **AI can buy products. Now it can book your cleaner, and PayPal handles the money.**
 
-Any small service business (cleaners, detailers, HVAC, lawn care, salons, anyone who lives on leads) becomes bookable three ways: by text, by phone call, and **by any AI assistant**. The AI quotes from the real price list, offers real open times, books the job and sends one PayPal link for the deposit. The customer approves the money in PayPal, so no AI ever spends it alone. Everything that happens after (moving the time, extra work, the final bill, tips, refunds, splitting the bill, no-shows) follows rules the customer agreed to, in the same thread. The owner runs it by texting an AI office manager, and gets paid out to their PayPal when a job is paid in full.
+Any small service business (cleaners, detailers, HVAC, lawn care, salons, anyone who lives on leads) becomes bookable three ways: by text, by phone call, and **by any AI assistant** over MCP. The AI quotes from the real price list, offers real open times, books the job and sends one PayPal link for the deposit. Only the customer can approve the deposit. For jobs in the next few days it is a **PayPal hold** (authorized, not charged) that is captured on the final bill or a no-show and released on a free cancel. At that approval the customer can also give their assistant a **spending limit for this booking**: after the job, the assistant pays the final bill and tip through the business's `pay_balance` tool only if it fits inside the limit, and asks the human otherwise. Everything else (moving the time, extra work, refunds, splitting the bill, invoices by email, chargebacks) follows rules the customer agreed to, in the same thread. The owner runs it by texting an AI office manager that asks "Refund $260 to Sarah Kim? Reply YES" before money moves, and gets paid out to their PayPal when a job is paid in full.
 
 Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/). Runs on the PayPal **sandbox** only. No real money moves.
 
@@ -22,10 +22,11 @@ All paths below are on the live demo, for example `https://first-answer-deposits
 
 Suggested walk-through:
 
-1. Open `/agent`, tap the first chip ("Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah."). Watch the protocol trace on the right: the assistant calls the business over MCP, gets a quote, checks real availability and books. It cannot pay. Tap **Approve the deposit in PayPal** and pay with a sandbox account or test card.
-2. Open `/text`, text "Can we do Saturday instead?" The time moves and the deposit moves with it. Try "Split it with my roommate" or "Is this refundable?" on the payment page.
-3. Open `/owner`, text "done at Sarah's". She gets the final bill with a tip option. Text "who owes me?", "refund Sarah", "how did we do this week?".
-4. Open `/setup` and set up your own business by texting. Give it a logo link and a color: every page your customers see (texts, booking record, payment page) carries your brand, with a small "Powered by First Answer" line. Each demo business has its own color too.
+1. Open `/agent`, tap the first chip ("Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah."). Watch the protocol trace on the right: the assistant calls the business over MCP, gets a quote, checks real availability and holds a time. If someone already took Friday morning, it holds the closest open time and says so. It cannot pay the deposit. Tap **Approve the deposit in PayPal**. On the payment page, tick **"Also let (your assistant) pay the final bill and tip for this booking, up to $260"** and pay (sandbox account, test card, or the demo checkout).
+2. Back on `/agent`, tap **Skip ahead (demo): the business finishes the job**, then the chip **"Pay the final bill and add a $20 tip"**. The trace shows `pay_balance` with the limit check (`limit $260 · spent $0 · this $230 → within the limit`). Set a lower limit next time and it asks you instead.
+3. Open `/text` (a fresh customer) and text "I need a deep clean for a 2 bedroom", reply `1` for a time and your first name. Then text "Can we do Saturday instead?" and pick a number: the time moves and the deposit moves with it. On the payment page, try "Is this refundable?", "Split it with my roommate" or "Email me an invoice".
+4. Open `/owner`. Tap **Load a sample day** (once is enough; **Reset demo** starts this business over). Text "who owes me?", "what's on tomorrow?", "refund Sarah" (it asks "Refund $… to Sarah Kim? Reply YES" first), "done at Marcus" (his job is still ahead, so it asks before billing), "how did we do this week?". On a paid booking, **Test a dispute** (demo servers only) shows the AI sending the evidence file.
+5. Open `/setup` and set up your own business by texting eight answers. Give it a logo link and a color: every page your customers see (texts, booking record, payment page) carries your brand, with a small "Powered by First Answer" line.
 
 ### Sandbox test payments
 
@@ -37,14 +38,18 @@ If the host has no PayPal keys, the page shows a **demo checkout** button instea
 
 ```
 src/
-  bookings.js      the single booking + money engine every path goes through (holds, deposits, changes,
-                   final bill, tips, refunds, splits, no-shows, waitlist, rebooking, payouts, disputes)
-  paypal.js        PayPal REST: Orders v2 (create/capture), Payments (refunds), Invoicing v2, Payouts, webhook verification
+  bookings.js      the single booking + money engine every path goes through (deposit holds, changes, final
+                   bill, tips, refunds, splits, no-shows, waitlist, rebooking, payouts, the assistant's
+                   spending limit, invoices, dispute evidence)
+  paypal.js        PayPal REST: Orders v2 (capture, authorize, vault), Payments v2 (authorization capture/void,
+                   refunds), Invoicing v2, Payouts, Disputes (provide-evidence), webhook verification
+  pdf.js           tiny PDF writer for the dispute evidence file
   agent/customer.js the customer-facing AI (texts, calls, the payment page) with tools over bookings.js
   agent/owner.js   the owner's AI office manager
   agent/scripted.js scripted fallback so the whole app runs with no AI key
   agent/model.js   Claude, Groq or Gemini through the Vercel AI SDK
-  agentic/         MCP server per business + UCP/A2A-style discovery files + the customer's assistant demo
+  agentic/         MCP server per business (incl. pay_balance) + UCP/A2A-style discovery files + the customer's
+                   assistant demo
   setup.js         "set up by text": a few answers become a working, branded business profile
   connect.js       leads in from any app, calendar feed out, busy-time import, signed updates out to a CRM
   slots.js         open times from hours, bookings and the owner's busy calendar
@@ -55,13 +60,33 @@ test/              node:test end-to-end tests in demo mode
 
 ### PayPal features used
 
+Every call below is in `src/paypal.js` and is made only when the server has PayPal sandbox keys. Without keys the same flows run with a demo checkout, and each simulated step is labeled (`DEMO-AUTH-…`, `DEMO-VOID-…`, "demo: simulated, no PayPal call").
+
 - **Orders v2** with the **JavaScript SDK** buttons: PayPal, **Venmo**, **Pay Later** (with Pay Later messaging), debit/credit card, no account needed. Deposits, final balances and tips are separate orders with `custom_id = booking:payment` so webhooks map back.
-- **Payments v2 refunds** (full and partial, newest capture first), with the reference number texted to the customer.
-- **Payouts** to the business owner's PayPal email when a job is paid in full.
-- **Invoicing v2** (create, send, remind, cancel) for customers who want a deposit invoice by email.
-- **Webhooks** with signature verification (`CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `CUSTOMER.DISPUTE.CREATED`).
-- **Dispute-ready records**: every booking keeps the terms shown, PayPal IDs, approvals and the whole conversation in one printable file.
+- **Deposits as holds** (Orders v2 `intent: AUTHORIZE` + `/authorize`, then Payments v2 `/authorizations/{id}/capture` with `final_capture`, or `/void`). See [Deposit holds](#deposit-holds) for when a deposit is a hold and when it is captured right away.
+- **Vault, save during purchase**: when the customer grants their assistant a limit, the deposit order carries `payment_source.paypal.attributes.vault` (`store_in_vault: ON_SUCCESS`, `usage_type: MERCHANT`, `customer_type: CONSUMER`). The vault id PayPal returns is kept with the booking, and `pay_balance` charges it with an order whose `payment_source.paypal.vault_id` is that id, only inside the limit. With the limit ticked, the page shows only the PayPal wallet button (that is what gets saved).
+- **Payments v2 refunds** (full and partial, newest capture first), with the reference number texted to the customer. A refund of a deposit still on hold voids it instead (never charged).
+- **Invoicing v2**: "email me an invoice" (customer AI tool `email_invoice`, or the scripted desk) creates and sends a deposit invoice; reminders also send PayPal's invoice reminder; paying by link or the booking changing cancels it; `INVOICING.INVOICE.PAID` confirms the booking.
+- **Payouts** to the business owner's PayPal email when a job is paid in full (captured money only; holds and cash are never paid out).
+- **Disputes**: on `CUSTOMER.DISPUTE.CREATED` the app checks the dispute accepts evidence (`provide-evidence` link) and sends the booking record as a PDF with `provide-evidence` (multipart: `input` JSON + `evidence-file`), then tells the owner "The AI defended your chargeback". If PayPal is not taking evidence yet, it says so and keeps the file ready.
+- **Webhooks** with signature verification (`CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `INVOICING.INVOICE.PAID`, `CUSTOMER.DISPUTE.CREATED`).
 - The payment page also registers **WebMCP** tools (`navigator.modelContext`) so browser assistants can read the bill and ask the business questions, the same proposed standard PayPal is adopting for Agent Ready.
+
+**Not used:** PayPal's Agent Toolkit (`@paypal/agent-toolkit`). Its AI SDK tools are built for AI SDK v4 (this app is on v7) and bring their own copy of `ai` plus OpenAI, LangChain and axios; more importantly its refund and dispute tools call PayPal directly, which would move money without updating the booking record the rest of the app trusts. The owner AI's money tools go through the booking engine instead.
+
+### Deposit holds
+
+PayPal honors an authorization for 3 days (it stays valid up to 29, but funds are only reliably there during the honor period). So:
+
+- A deposit is a **hold** only when the job ends at least 6 hours before the 3-day honor period does (the job and its final bill both fit inside it). Later jobs are **captured at booking**, exactly as before. The payment page says which one it is.
+- A hold is **captured** when the owner marks the job done (applied to the final bill), on a no-show, or on a late cancel. It is **voided** on a free cancel, when the business cancels and the customer takes the refund, or on a full refund. A partial refund captures only what the business keeps.
+- If a held booking is moved past the window, or its honor period is about to end while the booking is still on, the hold is captured then and becomes a regular deposit (the free-cancel terms still apply: a free cancel refunds it).
+- If PayPal refuses a capture, the deposit is marked failed and added back to what the customer owes.
+- Holds count toward the customer's bill but not toward the owner's "money in" or payouts until captured; the owner page shows them as "held in PayPal".
+
+### Owner safety
+
+The owner's AI office manager (and its scripted fallback) works only on the business it runs for. Refunds and no-shows take two steps: it asks the exact question ("Refund $260 to Sarah Kim? Reply YES") and the tool refuses a confirmed call unless the owner's last message was a YES to that same question. Two customers with the same first name get a "Which Sarah?" question. Marking a job done before its appointment time asks first.
 
 ### AI used
 
@@ -73,9 +98,10 @@ Every business gets:
 
 - an **MCP endpoint** (`POST /mcp/<business>`, Streamable HTTP) with tools to get the price sheet, check availability, quote, book, check status, reschedule and cancel;
 - discovery files at `/.well-known/ucp`, `/.well-known/agent-card.json` and `/llms.txt`;
-- a **human-approval step**: `book_appointment` holds the time and returns a PayPal approval link. Only the person can pay. The hold expires on its own if they don't.
+- a **human-approval step**: `book_appointment` holds the time and returns a PayPal approval link. Only the person can approve the deposit. The hold expires on its own if they don't.
+- **pay within a pre-approved limit**: at that approval the person can let their assistant pay this booking's final bill and tip, up to an amount they choose. After the job, `pay_balance` pays from the wallet PayPal saved with their consent only if the amount fits in what is left of the limit, and returns `limit_check` (limit, already spent, this payment, decision). Over the limit, or with no limit, nothing is paid and the human gets the approval link.
 
-Point Claude, ChatGPT or any MCP client at the endpoint and say "book me a deep clean Friday morning, under $300."
+Point Claude, ChatGPT or any MCP client at the endpoint and say "book me a deep clean Friday morning, under $300." If that exact time is taken, the demo assistant holds the closest open time and tells the person, so every visitor reaches the PayPal approval.
 
 ### White label
 
@@ -95,6 +121,8 @@ With no `.env` at all, the app runs in demo mode (demo checkout, scripted AI).
 ## Deploy (Render)
 
 `render.yaml` is included. Create a Web Service from this repo, then set `PUBLIC_URL`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID` (after adding `https://<your-app>/api/webhooks/paypal` as a webhook in the PayPal app) and one AI key in the Render dashboard. The free tier sleeps after 15 minutes; the first request wakes it, and its disk is not permanent, so demo data (and any business set up at `/setup`) resets when the service restarts. Leave `OWNER_PASSCODE` empty for judging so the owner page opens without a code.
+
+Subscribe the webhook to `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `INVOICING.INVOICE.PAID` and `CUSTOMER.DISPUTE.CREATED`. The sandbox app needs **Vault** (save payment methods) turned on for the assistant's spending limit, plus Invoicing, Payouts and Disputes access for those features.
 
 ## License
 

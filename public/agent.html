@@ -23,7 +23,7 @@
     <section class="intro">
       <div class="eyebrow">Agent-to-agent commerce &middot; open protocol (MCP) &middot; PayPal approval</div>
       <h1>Your customer's own AI assistant <span>books with you.</span></h1>
-      <p class="lede"><span class="cust">Sarah</span> tells <span class="poss">her</span> assistant what to book. It connects to <strong id="biz-name">the business</strong> over MCP, reads the prices, checks real open times and holds one. It can't spend a dollar: <span class="cust">Sarah</span> approves the deposit in PayPal.</p>
+      <p class="lede"><span class="cust">Sarah</span> tells <span class="poss">her</span> assistant what to book. It connects to <strong id="biz-name">the business</strong> over MCP, reads the prices, checks real open times and holds one. It can't pay the deposit: <span class="cust">Sarah</span> approves it in PayPal, and can let it pay the final bill up to a limit <span class="cust">Sarah</span> sets.</p>
       <div class="pick" id="pick" aria-label="Pick a business"></div>
     </section>
 
@@ -69,10 +69,10 @@
     <section class="how">
       <div class="step"><div class="n">1</div><div><strong>The customer asks their assistant.</strong><br />Any assistant that speaks MCP: Claude, ChatGPT, a browser agent, a custom bot.</div></div>
       <div class="step"><div class="n">2</div><div><strong>The assistant talks to the business.</strong><br />Prices, open times and a hold, over the business's own MCP endpoint. No scraping, no form filling.</div></div>
-      <div class="step"><div class="n">3</div><div><strong>The human approves the money.</strong><br />One PayPal page: PayPal, Venmo, Pay Later or card. The agent never holds a payment credential.</div></div>
+      <div class="step"><div class="n">3</div><div><strong>The human approves the money.</strong><br />One PayPal page for the deposit. Optional: a spending limit so the assistant can pay the final bill. The agent never holds a payment credential; the business checks the limit on every payment.</div></div>
     </section>
   </main>
-  <footer>First Answer &middot; the booking endpoint is open to any AI assistant. The money is not.</footer>
+  <footer>First Answer &middot; the booking endpoint is open to any AI assistant. The money moves only with the customer's OK.</footer>
   <script type="module" src="/js/agent.js"></script>
 </body>
 </html>

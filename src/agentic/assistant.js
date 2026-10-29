@@ -1,7 +1,8 @@
 // The customer's own AI assistant, for the agent-to-agent demo page. It is a real MCP client: it connects
 // over HTTP to the business's endpoint (/mcp/:bizId) and uses the same tools any outside assistant would.
 // With an AI key it runs a model with those tools; with none, a scripted planner makes the same calls.
-// Either way it never pays. It hands the human one PayPal approval link.
+// Either way it never pays the deposit: it hands the human one PayPal approval link. After the job it can pay the
+// final bill through pay_balance, which the business only honors inside a limit the human pre-approved.
 import { generateText, stepCountIs } from 'ai';
 import { createMCPClient } from '@ai-sdk/mcp';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -386,7 +387,7 @@ async function scriptedTurn(s, text, url, trace) {
       swapped ? `${asked ? `${asked[0].toUpperCase()}${asked.slice(1)} was taken` : 'That time was taken'}, so I held the closest open time instead.` : '',
       `Done. I held ${what} with ${biz.name} for ${r.appointment}.`,
       `Total ${usd(r.total)}: a ${usd(r.deposit)} deposit now and ${usd(r.total - r.deposit)} after the job.`,
-      `I can't pay for you. Approve the ${usd(r.deposit)} in PayPal (card, Venmo or Pay Later work too) and the time is yours. Free to cancel or move until ${r.free_cancel_until}.`,
+      `I can't pay the deposit for you. Approve the ${usd(r.deposit)} in PayPal (card, Venmo or Pay Later work too) and the time is yours. Free to cancel or move until ${r.free_cancel_until}.`,
       swapped ? 'Want a different time? Say "move it to" and the day.' : '',
     ].filter(Boolean).join(' ');
     return { reply, approval: { url: r.approval_url, amount: r.approval_amount, bookingId: r.booking_id } };

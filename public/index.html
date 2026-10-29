@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>First Answer Deposits · AI can book your cleaner, and PayPal handles the money</title>
-  <meta name="description" content="Any small service business becomes bookable by text, by call and by any AI assistant. The AI quotes, books and collects a PayPal deposit. The customer approves the money in PayPal; the AI never spends it alone." />
+  <meta name="description" content="Customers book a local service business by text, by call or through their own AI assistant. PayPal holds the deposit and the customer approves it; their assistant can pay the final bill only up to a limit they set." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/app.css" />
@@ -20,6 +20,14 @@
     .section { max-width: 1180px; margin: 0 auto; padding: 40px 16px 0; }
     .section h2 { font-size: 24px; letter-spacing: -0.02em; margin: 0 0 6px; }
     .section .lead { color: var(--muted); margin: 0 0 18px; max-width: 720px; }
+    .apis { max-width: 1180px; margin: 0 auto; padding: 28px 16px 0; }
+    .apis h2 { font-size: 15px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+    .apis ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 960px) { .apis ul { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 480px) { .apis ul { grid-template-columns: 1fr; } }
+    .apis li { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.4; color: var(--muted); min-width: 0; }
+    .apis li strong { display: block; color: var(--ink); font-size: 14px; }
+    .apis .fine { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; }
     .hero .tag { display: inline-block; font-size: 13px; font-weight: 700; color: #c9cdf2; background: rgba(255,255,255,0.08); padding: 6px 12px; border-radius: 999px; margin-bottom: 14px; }
   </style>
 </head>
@@ -27,9 +35,9 @@
   <section class="hero">
     <div class="inner">
       <div class="brand"><div class="brand-mark">F</div>First Answer Deposits</div>
-      <div class="tag" style="margin-top: 22px">PayPal AI Hackathon · runs on PayPal sandbox money</div>
+      <div class="tag" style="margin-top: 22px">PayPal AI Hackathon · PayPal sandbox only</div>
       <h1>AI can buy products.<br /><span>Now it can book your cleaner.</span></h1>
-      <p>Any small service business becomes bookable by text, by call, and by any AI assistant. The AI quotes, books and sends one PayPal link. The customer approves the deposit in PayPal, so the AI never spends money on its own. Changes, the final bill, tips and refunds all follow in the same thread.</p>
+      <p>Your customer's AI assistant books a local service business over MCP. PayPal holds the deposit and only the customer can approve it. After the job, the assistant pays the final bill, but only up to the limit the customer set.</p>
       <div class="cta">
         <a class="btn primary" href="/agent">Watch an AI assistant book it</a>
         <a class="btn secondary" href="/text">Text the business, as a customer</a>
@@ -43,7 +51,7 @@
         <a class="card way" href="/agent">
           <div class="num">1</div>
           <h3>Your customer's AI books it</h3>
-          <p>"Book a deep clean Friday morning, under $300." Their assistant talks to the business over an open protocol (MCP), picks a time, and hands them one PayPal approval. No agent ever moves money alone.</p>
+          <p>"Book a deep clean Friday morning, under $300." Their assistant talks to the business over MCP, holds a time and hands them one PayPal approval. It can pay the final bill later only inside a limit they pre-approve.</p>
           <span class="go">See the agent-to-agent booking &rarr;</span>
         </a>
         <a class="card way" href="/text">
@@ -55,11 +63,26 @@
         <a class="card way" href="/owner">
           <div class="num">3</div>
           <h3>The owner runs it by texting</h3>
-          <p>"Done at Sarah's" sends the final bill with a tip option. "Refund Mike" refunds through PayPal with a reference number. Every booking keeps what's booked, paid and owed in one record.</p>
+          <p>"Done at Sarah's" sends the final bill with a tip option. "Refund Mike" asks "Refund $150 to Mike? Reply YES" before any money moves. Every booking keeps what's booked, paid and owed in one record.</p>
           <span class="go">Open the owner's phone &rarr;</span>
         </a>
       </div>
     </div>
+
+    <section class="apis" aria-labelledby="apis-h">
+      <h2 id="apis-h">PayPal APIs this app calls</h2>
+      <ul>
+        <li><strong>Orders v2</strong>Create, capture, and AUTHORIZE for deposit holds</li>
+        <li><strong>Payments v2</strong>Capture or void a held deposit; refunds</li>
+        <li><strong>Vault (save during purchase)</strong>Wallet saved with consent for the assistant's limit</li>
+        <li><strong>JavaScript SDK</strong>PayPal, Venmo, Pay Later and card buttons, Pay Later messages</li>
+        <li><strong>Invoicing v2</strong>"Email me an invoice": create, send, remind, cancel</li>
+        <li><strong>Payouts</strong>The owner's share when a job is paid in full</li>
+        <li><strong>Disputes</strong>Evidence file sent automatically when a dispute opens</li>
+        <li><strong>Webhooks</strong>Signature verified: orders, captures, invoices, disputes</li>
+      </ul>
+      <p class="fine">Sandbox only. A server without PayPal keys runs the same flows with a demo checkout and labels every simulated step.</p>
+    </section>
 
     <section class="section">
       <h2>Every payment snag, handled in the thread</h2>
@@ -71,8 +94,8 @@
         <div class="card feature"><div class="icon">&#128179;</div><h3>A payment page that talks back</h3><p>PayPal, Venmo, Pay Later or card, no account needed, with the AI right there for any question.</p></div>
         <div class="card feature"><div class="icon">&#128260;</div><h3>Changes never break the money</h3><p>Move the time and the deposit moves too. Extra work needs a YES. Late cancels follow the terms they agreed to.</p></div>
         <div class="card feature"><div class="icon">&#128172;</div><h3>Run it by texting</h3><p>"Who owes me?" "Done at Sarah's." "Refund Mike." Your AI office manager moves the calendar and the money.</p></div>
-        <div class="card feature"><div class="icon">&#128176;</div><h3>Final bill and tips in one tap</h3><p>One link for the balance plus an optional tip. Split it, or send it to whoever is paying.</p></div>
-        <div class="card feature"><div class="icon">&#128737;</div><h3>Dispute-ready records</h3><p>Terms shown, PayPal reference numbers, approvals and the whole conversation in one printable file.</p></div>
+        <div class="card feature"><div class="icon">&#128176;</div><h3>Deposits held, not charged</h3><p>For jobs in the next few days the deposit is a PayPal hold: captured on the final bill or a no-show, released on a free cancel.</p></div>
+        <div class="card feature"><div class="icon">&#128737;</div><h3>Chargebacks answered for you</h3><p>When PayPal opens a dispute, the AI sends PayPal the booking record (terms shown, PayPal IDs, approvals, the whole conversation) and tells you.</p></div>
         <div class="card feature"><div class="icon">&#127912;</div><h3>Your brand, not ours</h3><p>Your logo and color on every page your customers see: texts, booking page, payment page.</p></div>
         <div class="card feature"><div class="icon">&#128268;</div><h3>Plugs into what you use</h3><p>Leads in from any app or form, a calendar link out, busy times in, updates to your CRM, and an MCP endpoint for AI assistants.</p></div>
         <div class="card feature"><div class="icon">&#127974;</div><h3>Money lands in your PayPal</h3><p>Set up by texting a few answers. When a job is paid in full, the net goes to your PayPal through Payouts.</p></div>

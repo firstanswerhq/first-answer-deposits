@@ -85,7 +85,7 @@ export function agentCard(business, base) {
     card_style: 'a2a-style',
     note: 'Shaped like an A2A agent card so agents can read it. Not a certified A2A implementation: this agent is reached over MCP, not A2A JSON-RPC.',
     name: `${business.name} booking agent`,
-    description: `Books ${business.trade} appointments with ${business.name} in ${business.city}. Quotes from the real price sheet, offers real open times, holds a time and asks the human to approve a PayPal deposit. The agent cannot pay.`,
+    description: `Books ${business.trade} appointments with ${business.name} in ${business.city}. Quotes from the real price sheet, offers real open times, holds a time and asks the human to approve a PayPal deposit. The agent cannot pay the deposit; after the job it can pay the final bill only inside a limit the human pre-approved.`,
     url: mcpUrl(business, base),
     preferredTransport: 'MCP',
     additionalInterfaces: [{ url: mcpUrl(business, base), transport: 'MCP' }],
@@ -137,9 +137,10 @@ Tools, in the order to use them:
 3. check_availability     optional day ("friday", "2026-10-30", "today", "tomorrow") -> slots with start (ISO) and label
 4. book_appointment       service, size, slot_start, customer_name, max_total (budget), agent_name -> holds the time for ${HOLD_MINUTES()} minutes
 5. get_booking_status / reschedule_booking / cancel_booking   need booking_id and booking_key from step 4
+6. pay_balance            after the job: pays the final bill (+ optional tip) only inside the human's pre-approved limit
 
 ## Money
-You cannot pay. book_appointment returns approval_url. Give it to the human. They approve the deposit on a PayPal checkout page (PayPal, Venmo, Pay Later or a card, no account needed). The time is confirmed when they approve. If they do not approve within ${HOLD_MINUTES()} minutes the hold is released. If the price is above max_total nothing is booked and you get the quote back.
+You cannot pay the deposit. book_appointment returns approval_url. Give it to the human. They approve the deposit on a PayPal checkout page (PayPal, Venmo, Pay Later or a card, no account needed). Deposits for jobs in the next few days are a PayPal hold (authorized, captured on the final bill, released on a free cancel). The time is confirmed when they approve. On that page the human may also let you pay this booking's final bill up to a limit they choose; pay_balance enforces it and returns approval_url for anything over it. If they do not approve within ${HOLD_MINUTES()} minutes the hold is released. If the price is above max_total nothing is booked and you get the quote back.
 
 ## More
 - UCP-style profile: ${base}/.well-known/ucp?biz=${business.id}
