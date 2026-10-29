@@ -291,11 +291,13 @@ export function orderBelongs(payment, orderId) {
   return payment.orderId === orderId || (payment.orders || []).some((o) => o.id === orderId);
 }
 
+// Finds the payment an invoice was sent for, including invoices that a newer one replaced (kept in p.invoices),
+// so a late payment on a replaced invoice is never silently dropped.
 export function findPaymentByInvoice(invoiceId) {
   if (!invoiceId) return null;
   for (const b of store.listBookings()) {
-    const p = b.payments.find((x) => x.invoice?.id === invoiceId);
-    if (p) return { booking: b, payment: p };
+    const p = b.payments.find((x) => x.invoice?.id === invoiceId || (x.invoices || []).some((i) => i.id === invoiceId));
+    if (p) return { booking: b, payment: p, invoice: p.invoice?.id === invoiceId ? p.invoice : p.invoices.find((i) => i.id === invoiceId) };
   }
   return null;
 }
@@ -359,13 +361,54 @@ async function newPayment(booking, data) {
 // A link that can no longer take money: turned off, and any PayPal invoice for it is canceled too.
 function voidPayment(p) {
   store.updatePayment(p.id, { status: 'void' });
-  retireInvoice(p, 'This deposit request was replaced or the booking changed, so nothing is owed on this invoice.');
+  return retireInvoice(p, 'This deposit request was replaced or the booking changed, so nothing is owed on this invoice.');
 }
+// Cancels the payment's open PayPal invoice. It is marked canceled here right away (so the app never treats it as
+// payable), and PayPal's cancel is retried; one that still fails stays cancelConfirmed:false and reconcileInvoices()
+// retries it later. If the customer pays it anyway in between, the INVOICING.INVOICE.PAID webhook refunds it.
 function retireInvoice(p, note) {
-  const inv = p?.invoice;
-  if (!inv || inv.status !== 'sent') return;
-  store.updatePayment(p.id, { invoice: { ...inv, status: 'canceled', canceledAt: new Date().toISOString() } });
-  if (!inv.demo && paypalReady) paypal.cancelInvoice(inv.id, { note }).catch((e) => console.error('cancel invoice', e.message));
+  const inv = store.findPayment(p.id)?.payment?.invoice || p?.invoice;
+  if (!inv || inv.status !== 'sent') return Promise.resolve(false);
+  const local = Boolean(inv.demo || !paypalReady);
+  store.updatePayment(p.id, { invoice: { ...inv, status: 'canceled', canceledAt: new Date().toISOString(), cancelNote: note, cancelConfirmed: local } });
+  if (local) return Promise.resolve(true);
+  return cancelInvoiceWithRetry(p.id, inv.id, note);
+}
+async function cancelInvoiceWithRetry(paymentId, invoiceId, note, tries = 3) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      await paypal.cancelInvoice(invoiceId, { note });
+      markInvoice(paymentId, invoiceId, { cancelConfirmed: true, cancelError: null });
+      return true;
+    } catch (err) {
+      markInvoice(paymentId, invoiceId, { cancelError: err.message, cancelTries: i + 1 });
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 150 * 2 ** i));
+    }
+  }
+  console.error('cancel invoice', invoiceId, 'still failing; will retry');
+  return false;
+}
+function markInvoice(paymentId, invoiceId, patch) {
+  const found = store.findPayment(paymentId);
+  if (!found) return;
+  const p = found.payment;
+  if (p.invoice?.id === invoiceId) store.updatePayment(paymentId, { invoice: { ...p.invoice, ...patch } });
+  else if ((p.invoices || []).some((i) => i.id === invoiceId)) store.updatePayment(paymentId, { invoices: p.invoices.map((i) => (i.id === invoiceId ? { ...i, ...patch } : i)) });
+}
+// Background job: invoices this app canceled whose PayPal cancel has not been confirmed yet.
+export async function reconcileInvoices() {
+  let n = 0;
+  if (!paypalReady) return n;
+  for (const b of store.listBookings()) {
+    for (const p of b.payments) {
+      for (const inv of [p.invoice, ...(p.invoices || [])].filter(Boolean)) {
+        if (inv.status === 'canceled' && inv.cancelConfirmed === false && !inv.demo) {
+          if (await cancelInvoiceWithRetry(p.id, inv.id, inv.cancelNote || 'This invoice is no longer needed.', 1)) n++;
+        }
+      }
+    }
+  }
+  return n;
 }
 
 // "Email me an invoice": the deposit goes out as a PayPal invoice (Invoicing v2) to the customer's email, as
@@ -395,8 +438,13 @@ export async function emailDepositInvoice(bookingId, { email = '' } = {}) {
   } else {
     invoice = { id: `DEMO-INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`, link: null, to, status: 'sent', demo: true, sentAt: new Date().toISOString() };
   }
-  retireInvoice(pending, 'A new invoice was sent.');
-  store.updatePayment(pending.id, { invoice });
+  if (pending.invoice) {
+    await retireInvoice(pending, 'A new invoice was sent.');
+    // Keep the replaced invoice on record, so a late payment on it is still found (and refunded).
+    const old = store.findPayment(pending.id).payment;
+    store.updatePayment(pending.id, { invoices: [...(old.invoices || []), old.invoice].slice(-10) });
+  }
+  store.updatePayment(pending.id, { invoice: { ...invoice, amount: pending.amount } });
   store.updateBooking(b.id, { customerEmail: to });
   store.addTimeline(b.id, `Deposit invoice ${invoice.id} for ${usd(pending.amount)} ${invoice.demo ? 'recorded (demo mode: no email sent)' : `sent to ${to} through PayPal Invoicing`}.`);
   store.logActivity(`${invoice.demo ? 'Recorded a demo' : 'Sent a PayPal'} invoice for ${b.customerName}'s ${usd(pending.amount)} deposit${invoice.demo ? '' : ` to ${to}`}.`, { bookingId: b.id, kind: 'invoice' });
@@ -480,6 +528,8 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
   if (p.kind === 'deposit') {
     if (b.status === 'held' && t.depositPaid + 0.001 >= b.deposit) {
       store.updateBooking(b.id, { status: 'confirmed', confirmedAt: new Date().toISOString() });
+      // The deposit is covered: any other deposit link (a split share, another invoice) can no longer take money.
+      b.payments.filter((x) => x.id !== paymentId && x.status === 'pending' && x.kind === 'deposit').forEach(voidPayment);
       const held = hold ? ` It's a hold on your PayPal: you're not charged until the job is done, and a free cancel releases it.` : '';
       store.addMessage(b.leadId, 'assistant', `Got your ${usd(b.deposit)} deposit${who}, thank you! You're confirmed for ${b.service} on ${b.slotLabel}.${held} ${termsLine(store.getBooking(b.id))} Your booking: ${bookingPageUrl(b)}`, { kind: 'confirmation' });
       store.logActivity(`Deposit ${hold ? 'held' : 'paid'}: ${usd(b.deposit)} from ${b.customerName}${who}${hold ? ' (authorized in PayPal, captured on the final bill)' : ''}. ${b.slotLabel} is confirmed.`, { bookingId: b.id, kind: 'deposit_paid' });
@@ -794,7 +844,7 @@ export async function customerCancel(bookingId, { notify = true } = {}) {
   if (t.paid <= 0) {
     store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString() });
     // Turn off the deposit link too, so a canceled booking can't be paid for later.
-    b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
+    await Promise.all(b.payments.filter((p) => p.status === 'pending').map(voidPayment));
     store.addTimeline(b.id, 'Customer canceled before paying. Hold released and the payment link turned off.');
     store.logActivity(`${b.customerName} canceled ${b.slotLabel} (nothing was paid).`, { bookingId: b.id, kind: 'cancel' });
     await offerToWaitlist(b.presetId, b.slotStart, b.slotLabel);
@@ -825,7 +875,7 @@ export async function businessCancel(bookingId, reason = '') {
   store.updateBooking(b.id, { status: 'needs_rebook', businessCanceledAt: new Date().toISOString(), businessCancelReason: reason });
   const paid = totals(b).paid;
   // Nothing paid yet: turn the deposit link off, so nobody pays for a time we canceled. Picking a new time sends a fresh one.
-  if (paid <= 0) b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
+  if (paid <= 0) await Promise.all(b.payments.filter((p) => p.status === 'pending').map(voidPayment));
   const list = options.map((s, i) => `${i + 1}) ${s.label}`).join('  ');
   store.addMessage(
     b.leadId,
@@ -852,7 +902,7 @@ export async function acceptBusinessCancel(bookingId, { notify = true } = {}) {
     return { outcome: 'refunded_in_full', ...r };
   }
   store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), cancelReason: 'Business canceled; customer chose not to rebook' });
-  b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
+  await Promise.all(b.payments.filter((p) => p.status === 'pending').map(voidPayment));
   store.addTimeline(b.id, 'Customer chose not to rebook after the business canceled. Nothing was paid, so nothing to refund. Booking closed.');
   store.logActivity(`${b.customerName} closed out the time you canceled (nothing was paid).`, { bookingId: b.id, kind: 'cancel' });
   return { outcome: 'released', refunded: 0, reference: null, booking: store.getBooking(b.id) };
@@ -863,7 +913,7 @@ export async function releaseHold(bookingId, reason = 'Deposit not paid in time'
   if (!b) throw new Error('Booking not found.');
   if (b.status !== 'held') throw new Error(`${b.customerName}'s booking is ${STATUS_WORDS[b.status] || b.status}, not an unpaid hold.`);
   store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), cancelReason: reason });
-  b.payments.filter((p) => p.status === 'pending').forEach(voidPayment);
+  await Promise.all(b.payments.filter((p) => p.status === 'pending').map(voidPayment));
   store.addMessage(b.leadId, 'assistant', `We released the hold on ${b.slotLabel} since the deposit didn't come through. Text us anytime and we'll find you a new time.`, { kind: 'released' });
   store.addTimeline(b.id, `Hold released: ${reason}.`);
   store.logActivity(`Released ${b.customerName}'s unpaid hold on ${b.slotLabel}.`, { bookingId: b.id, kind: 'release' });
@@ -917,6 +967,13 @@ export async function reschedule(bookingId, newSlotStart, { notify = true } = {}
     if (jobEnd + BILL_MARGIN_HOURS * HOUR > Date.parse(p.hold.honorUntil)) await captureHold(p.id, "Moved past PayPal's 3-day hold window, so the deposit was captured as a regular deposit");
   }
   nb = store.getBooking(b.id);
+  // An emailed deposit invoice names the old time: it is canceled, and the pay link (same deposit) stays.
+  let invoiceCanceled = false;
+  for (const p of nb.payments.filter((x) => x.status === 'pending' && x.invoice?.status === 'sent')) {
+    await retireInvoice(p, `The appointment moved to ${label}, so this invoice was canceled. Use the payment link in your texts instead.`);
+    invoiceCanceled = true;
+  }
+  nb = store.getBooking(b.id);
   // Back to a held booking whose deposit link was turned off (the business canceled before it was paid): send a fresh one.
   let freshLink = null;
   if (nextStatus === 'held' && !nb.payments.some((p) => p.kind === 'deposit' && p.status === 'pending')) {
@@ -925,8 +982,10 @@ export async function reschedule(bookingId, newSlotStart, { notify = true } = {}
     nb = store.getBooking(b.id);
   }
   const paid = totals(nb).paid;
-  store.addTimeline(b.id, `Moved from ${old.label} to ${label}. ${usd(paid)} already paid carried over; no new charge.${freshLink ? ' Sent a fresh deposit link.' : ''}`);
-  if (notify) store.addMessage(nb.leadId, 'assistant', `Done! You're moved to ${label}.${paid > 0 ? ` Your ${usd(paid)} moved with you, nothing new to pay.` : ''}${freshLink ? ` Tap to pay the deposit and lock it in: ${freshLink}` : ''} Free to cancel or move until ${freeCancelLabel(nb)}.`, { kind: 'rescheduled' });
+  store.addTimeline(b.id, `Moved from ${old.label} to ${label}. ${usd(paid)} already paid carried over; no new charge.${freshLink ? ' Sent a fresh deposit link.' : ''}${invoiceCanceled ? ' The emailed deposit invoice (old time) was canceled.' : ''}`);
+  const stillPending = nb.payments.find((p) => p.status === 'pending' && p.kind === 'deposit');
+  const invoiceNote = invoiceCanceled && stillPending && !freshLink ? ` The emailed invoice had the old time, so it's canceled; pay the deposit here instead: ${payPageUrl(stillPending)}` : '';
+  if (notify) store.addMessage(nb.leadId, 'assistant', `Done! You're moved to ${label}.${paid > 0 ? ` Your ${usd(paid)} moved with you, nothing new to pay.` : ''}${freshLink ? ` Tap to pay the deposit and lock it in: ${freshLink}` : ''}${invoiceNote} Free to cancel or move until ${freeCancelLabel(nb)}.`, { kind: 'rescheduled' });
   store.logActivity(`${nb.customerName} moved from ${old.label} to ${label}${paid > 0 ? `; ${usd(paid)} carried over` : ''}.`, { bookingId: b.id, kind: 'reschedule' });
   await offerToWaitlist(b.presetId, old.start, old.label);
   return nb;
@@ -1024,7 +1083,7 @@ export async function splitDue(bookingId, ways = 2) {
   const kind = b.status === 'held' ? 'deposit' : 'balance';
   const amountDue = kind === 'deposit' ? round2(b.deposit - t.depositPaid) : t.due;
   if (amountDue <= 0) throw new Error('Nothing is due right now.');
-  open.forEach(voidPayment);
+  await Promise.all(open.map(voidPayment));
   const share = Math.floor((amountDue / ways) * 100) / 100;
   const links = [];
   for (let i = 0; i < ways; i++) {
@@ -1257,6 +1316,71 @@ export function summary({ presetId = null } = {}) {
   };
 }
 
+// ---------------- a PayPal invoice was paid ----------------
+// Counts toward the deposit only when that deposit is still waiting on this very invoice. Paid on a closed booking,
+// a deposit already paid another way, a request that was split or replaced, or an invoice a newer one replaced:
+// the money is refunded automatically, logged on the booking, and the owner and the customer are told.
+export async function invoicePaid(inv, txn) {
+  const found = findPaymentByInvoice(inv?.id);
+  if (!found) return null;
+  return withBookingLock(found.booking.id, async () => {
+    const { booking, payment, invoice } = findPaymentByInvoice(inv.id);
+    const txnId = txn?.payment_id || txn?.id || null;
+    const amount = round2(Number(inv?.amount?.value ?? inv?.payments?.paid_amount?.value ?? invoice?.amount ?? payment.amount));
+    // The same webhook twice: already counted, or already refunded.
+    if (payment.invoicePaidId === inv.id) return booking;
+    if ((booking.invoiceRefunds || []).some((x) => x.invoiceId === inv.id)) return booking;
+    const isCurrent = payment.invoice?.id === inv.id;
+    const why =
+      payment.status === 'completed' ? 'the deposit had already been paid another way'
+        : payment.status !== 'pending' ? 'that deposit request had been replaced or turned off'
+          : !isCurrent ? 'a newer invoice had replaced it'
+            : CLOSED.includes(booking.status) ? `the booking was ${(STATUS_WORDS[booking.status] || booking.status).toLowerCase()}`
+              : booking.status === 'needs_rebook' ? 'the business had canceled that time'
+                : booking.status !== 'held' ? 'nothing was owed on it anymore'
+                  : null;
+    if (!why) {
+      store.updatePayment(payment.id, { invoicePaidId: inv.id, invoice: { ...payment.invoice, status: 'paid', paidAt: new Date().toISOString() } });
+      return completePayment(payment.id, { captureId: txnId, via: 'PayPal invoice' });
+    }
+    return refundInvoicePayment(booking, inv.id, invoice, txnId, amount, why);
+  });
+}
+
+async function refundInvoicePayment(booking, invoiceId, invoice, txnId, amount, why) {
+  const demo = Boolean(invoice?.demo || !paypalReady);
+  let refundId = `DEMO-REFUND-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  let status = 'COMPLETED';
+  let error = null;
+  if (!demo) {
+    try {
+      if (!txnId) throw new Error('PayPal did not say which payment paid the invoice');
+      const r = await paypal.refundCapture(txnId, { note: `Refunded automatically: ${why}.` });
+      refundId = r.refundId;
+      status = r.status || 'COMPLETED';
+    } catch (err) {
+      status = 'FAILED';
+      error = err.message;
+    }
+  }
+  const entry = { invoiceId, txnId, amount, refundId: status === 'FAILED' ? null : refundId, status, why, error, at: new Date().toISOString(), ...(demo ? { demo: true } : {}) };
+  store.updateBooking(booking.id, { invoiceRefunds: [...(store.getBooking(booking.id).invoiceRefunds || []), entry] });
+  const sim = demo ? ' (demo: simulated, no PayPal call)' : '';
+  if (status === 'FAILED') {
+    store.addTimeline(booking.id, `Invoice ${invoiceId} was paid (${usd(amount)}) after ${why}. The automatic refund failed (${error}); refund it by hand in PayPal.`);
+    const line = `Action needed: ${booking.customerName} paid invoice ${invoiceId} (${usd(amount)}) after ${why}, and the automatic refund failed (${error}). Please refund it in PayPal.`;
+    store.logActivity(line, { bookingId: booking.id, kind: 'invoice_refund_failed' });
+    store.addOwnerMessage('assistant', line, { presetId: booking.presetId, alert: true });
+    return store.getBooking(booking.id);
+  }
+  store.addTimeline(booking.id, `Invoice ${invoiceId} was paid (${usd(amount)}) after ${why}, so it was refunded automatically. PayPal refund ${refundId}${sim}.`);
+  const line = `Heads up: ${booking.customerName} paid invoice ${invoiceId} (${usd(amount)}) after ${why}, so the AI refunded it automatically (reference ${refundId})${sim}. Nothing for you to do.`;
+  store.logActivity(line, { bookingId: booking.id, kind: 'invoice_refund' });
+  store.addOwnerMessage('assistant', line, { presetId: booking.presetId, alert: true });
+  store.addMessage(booking.leadId, 'assistant', `Your ${usd(amount)} invoice payment came in after ${why}, so we refunded it right away. Reference: ${refundId}. Nothing else is owed on it.`, { kind: 'refund' });
+  return store.getBooking(booking.id);
+}
+
 // ---------------- PayPal webhooks ----------------
 // The tip on a captured order, so the payout is right even when the webhook arrives before the return page.
 // First the tip saved with the order that was captured; else what was captured above the amount owed.
@@ -1298,9 +1422,8 @@ export async function handlePayPalEvent(event) {
   if (type === 'INVOICING.INVOICE.PAID') {
     // Payload shapes differ between docs versions: the invoice at resource or at resource.invoice.
     const inv = r.invoice || r;
-    const found = store.findPaymentBy('invoiceId', inv.id) || findPaymentByInvoice(inv.id);
     const txn = inv?.payments?.transactions?.[0] || inv?.payments?.[0] || null;
-    if (found) return completePayment(found.payment.id, { captureId: txn?.payment_id || null, via: 'PayPal invoice' });
+    return invoicePaid(inv, txn);
   }
   if (type === 'CUSTOMER.DISPUTE.CREATED') {
     const txn = r?.disputed_transactions?.[0];

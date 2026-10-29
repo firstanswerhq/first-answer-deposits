@@ -436,6 +436,7 @@ connect.startPushing();
 // ---------- background jobs ----------
 setInterval(() => B.releaseStaleHolds().catch((e) => console.error('releaseStaleHolds', e.message)), 60 * 1000).unref();
 setInterval(() => B.settleExpiringHolds().catch((e) => console.error('settleExpiringHolds', e.message)), 10 * 60 * 1000).unref();
+setInterval(() => B.reconcileInvoices().catch((e) => console.error('reconcileInvoices', e.message)), 5 * 60 * 1000).unref();
 setInterval(() => B.sendRebookNudges().catch((e) => console.error('rebook', e.message)), 60 * 60 * 1000).unref();
 
 // Tests import the app and listen on their own port (FAD_NO_LISTEN=1).

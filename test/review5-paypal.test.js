@@ -112,3 +112,89 @@ test('four parallel pay_balance calls charge the saved wallet once, inside the l
   // The PayPal-Request-Id is the payment alone, so a retry of the same bill with another tip is de-duplicated.
   assert.match(charges[0].key, /^vault-charge-pay_[^-]+$/);
 });
+
+// ---------- 4. invoices paid on closed or replaced deposits ----------
+test('invoice paid after the customer canceled: refunded automatically, owner alerted, nothing counted', async () => {
+  const b = await agentBooking('Canceled');
+  await B.emailDepositInvoice(b.id, { email: 'c@example.com' });
+  const inv = store.getBooking(b.id).payments[0].invoice.id;
+  await B.customerCancel(b.id, { notify: false });
+  await invoicePaid(inv, 'TXN-INV-C');
+  const nb = store.getBooking(b.id);
+  assert.equal(nb.status, 'canceled');
+  assert.equal(B.totals(nb).paid, 0);
+  assert.equal(refundsOf('TXN-INV-C').length, 1, 'PayPal refund called on the invoice payment');
+  assert.equal(nb.invoiceRefunds[0].status, 'COMPLETED');
+  assert.ok(store.listActivity().some((a) => a.kind === 'invoice_refund' && a.text.includes(inv)), 'logged on the owner feed');
+  assert.ok(store.listOwnerMessages('cleaning').some((m) => m.alert && /refunded it automatically/.test(m.text)));
+  // The same webhook again refunds nothing more.
+  await invoicePaid(inv, 'TXN-INV-C');
+  assert.equal(refundsOf('TXN-INV-C').length, 1);
+});
+
+test('bill split after an invoice: the paid invoice (voided original) is refunded, the shares stay the way to pay', async () => {
+  const b = await agentBooking('Splitter');
+  await B.emailDepositInvoice(b.id, { email: 's@example.com' });
+  const inv = store.getBooking(b.id).payments[0].invoice.id;
+  await B.splitDue(b.id, 2);
+  await invoicePaid(inv, 'TXN-INV-S');
+  const nb = store.getBooking(b.id);
+  assert.equal(nb.status, 'held');
+  assert.equal(B.totals(nb).depositPaid, 0, 'the voided original never counts');
+  assert.equal(refundsOf('TXN-INV-S').length, 1);
+  assert.equal(nb.payments.filter((p) => p.status === 'pending').length, 2);
+});
+
+test('link paid first, then the invoice: the invoice money is refunded, not silently dropped', async () => {
+  const b = await agentBooking('DoublePay');
+  await B.emailDepositInvoice(b.id, { email: 'dp@example.com' });
+  const inv = store.getBooking(b.id).payments[0].invoice.id;
+  await pay(b.payments[0].id);
+  await invoicePaid(inv, 'TXN-INV-9');
+  const nb = store.getBooking(b.id);
+  assert.equal(refundsOf('TXN-INV-9').length, 1);
+  assert.match(nb.timeline.at(-1).text, /refunded automatically/);
+  assert.equal(nb.payments[0].via, 'paypal');
+});
+
+test('a replaced invoice paid late is found and refunded; paying the current invoice voids the other deposit links', async () => {
+  const b = await agentBooking('TwoInvoices');
+  await B.emailDepositInvoice(b.id, { email: 'one@example.com' });
+  const first = store.getBooking(b.id).payments[0].invoice.id;
+  await B.emailDepositInvoice(b.id, { email: 'two@example.com', confirmNewAddress: true });
+  const second = store.getBooking(b.id).payments[0].invoice.id;
+  assert.notEqual(first, second);
+  await invoicePaid(first, 'TXN-OLD');
+  assert.equal(refundsOf('TXN-OLD').length, 1, 'the replaced invoice is refunded');
+  await invoicePaid(second, 'TXN-NEW');
+  const nb = store.getBooking(b.id);
+  assert.equal(nb.status, 'confirmed');
+  assert.equal(refundsOf('TXN-NEW').length, 0);
+  assert.equal(nb.payments[0].via, 'PayPal invoice');
+});
+
+test('cancel of a replaced invoice is retried until PayPal confirms; a reschedule cancels the emailed invoice', async () => {
+  const b = await agentBooking('Retry');
+  await B.emailDepositInvoice(b.id, { email: 'r@example.com' });
+  const inv = store.getBooking(b.id).payments[0].invoice.id;
+  fake.failCancel = 5; // more than the immediate retries
+  await B.customerCancel(b.id, { notify: false });
+  let p = store.getBooking(b.id).payments[0];
+  assert.equal(p.invoice.status, 'canceled');
+  assert.equal(p.invoice.cancelConfirmed, false);
+  fake.failCancel = 0;
+  assert.equal(await B.reconcileInvoices(), 1);
+  p = store.getBooking(b.id).payments[0];
+  assert.equal(p.invoice.cancelConfirmed, true);
+  assert.ok(calls.filter((c) => c.path === `/v2/invoicing/invoices/${inv}/cancel`).length >= 4);
+
+  const c = await agentBooking('Mover');
+  await B.emailDepositInvoice(c.id, { email: 'm@example.com' });
+  const inv2 = store.getBooking(c.id).payments[0].invoice.id;
+  const next = B.availableSlots(biz, { limit: 20 }).find((s) => s.start !== c.slotStart);
+  await B.reschedule(c.id, next.start);
+  const nc = store.getBooking(c.id);
+  assert.equal(nc.payments[0].invoice.status, 'canceled');
+  assert.ok(calls.some((x) => x.path === `/v2/invoicing/invoices/${inv2}/cancel`));
+  assert.match(store.getLead(nc.leadId).messages.at(-1).text, /invoice had the old time/);
+});
