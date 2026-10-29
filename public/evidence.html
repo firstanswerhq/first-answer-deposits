@@ -11,12 +11,23 @@
     h1 { font-size: 24px; margin: 0 0 4px; }
     h2 { font-size: 16px; margin: 28px 0 8px; border-bottom: 2px solid var(--ink); padding-bottom: 4px; }
     pre { white-space: pre-wrap; font: inherit; }
+    .bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; }
+    .doc table.list { width: 100%; }
+    .doc td, .doc th { overflow-wrap: anywhere; }
+    /* Phones: the long tables become stacked rows, so the page never scrolls sideways. */
+    @media (max-width: 640px) {
+      .doc { padding: 20px 16px 48px; }
+      .bar { flex-wrap: wrap; }
+      #timeline tr, #convo tr, #payments tr, #changes tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--line, #e6e8ef); }
+      #timeline td, #convo td, #payments td, #changes td, #changes th { display: block; white-space: normal !important; border: 0; padding: 2px 0; text-align: left; }
+      #payments tr:first-child, #changes tr:first-child:has(th) { display: none; }
+    }
     @media print { .noprint { display: none; } }
   </style>
 </head>
 <body>
   <div class="doc">
-    <div class="noprint" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px">
+    <div class="noprint bar">
       <span class="small muted">Everything about this booking in one file: use it for disputes, chargebacks or your records.</span>
       <button class="btn secondary small" onclick="print()">Print or save as PDF</button>
     </div>

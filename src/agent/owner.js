@@ -176,6 +176,7 @@ function ownerTools(business) {
       inputSchema: z.object({ bookingId: z.string(), confirmed: z.boolean().optional() }),
       execute: safe(async ({ bookingId, confirmed }) => {
         const b = store.getBooking(mine(bookingId));
+        if (Date.parse(b.slotStart) > Date.now()) return { error: `${b.customerName}'s appointment is ${b.slotLabel}, which hasn't started yet, so it can't be a no-show.` };
         const gate = confirmGate('no_show', b, null, confirmed);
         if (gate) return gate;
         return brief(await B.markNoShow(b.id));

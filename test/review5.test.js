@@ -270,3 +270,13 @@ test('invoices: valid emails only, a new address needs a YES, at most 2 per book
   await assert.rejects(B.emailDepositInvoice(booking.id, { email: 'third@example.com', confirmNewAddress: true }), /already emailed 2 invoices/);
   assert.equal(store.getBooking(booking.id).payments[0].invoice.to, 'boss@example.com');
 });
+
+// ---------- 13. no no-shows before the appointment ----------
+test('a no-show cannot be marked before the appointment time (engine and owner text)', async () => {
+  store.resetAll();
+  const b = await agentPaid('Early', 0, { slot: 2 });
+  await assert.rejects(B.markNoShow(b.id), /hasn't started yet/);
+  const r = await say('cleaning', 'no-show early');
+  assert.match(r, /hasn't started yet/);
+  assert.equal(store.getBooking(b.id).status, 'confirmed');
+});

@@ -88,6 +88,8 @@ test('a free cancel releases the hold (never charged); a no-show captures it; la
 
   const n = await bookWhere('authorize', 'Noah');
   B.completeDemoPayment(n.payments[0].id);
+  await assert.rejects(B.markNoShow(n.id), /hasn't started yet/, 'never a no-show before the appointment');
+  store.updateBooking(n.id, { slotStart: new Date(Date.now() - 3600e3).toISOString() }); // the appointment time came
   const ns = await B.markNoShow(n.id);
   assert.equal(ns.status, 'no_show');
   assert.equal(ns.depositKept, 50);

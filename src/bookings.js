@@ -999,6 +999,8 @@ export async function markNoShow(bookingId) {
   let b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
   if (!['confirmed', 'held'].includes(b.status)) throw new Error(`${b.customerName}'s booking is ${(STATUS_WORDS[b.status] || b.status).toLowerCase()}, so it can't be marked a no-show.`);
+  // Nobody is a no-show before their appointment has started.
+  if (Date.now() < Date.parse(b.slotStart)) throw new Error(`${b.customerName}'s appointment is ${b.slotLabel}, which hasn't started yet, so it can't be a no-show. If they canceled, cancel the booking instead.`);
   // A held deposit is captured now: a no-show is exactly what the hold was for.
   b = await captureHolds(b, 'No-show: the deposit is kept per the terms');
   endMandate(b.id, 'revoked', 'No-show.');

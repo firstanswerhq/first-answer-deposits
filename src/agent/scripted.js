@@ -419,7 +419,9 @@ export async function scriptedOwnerReply(text) {
       const list = all.filter((b) => ['confirmed', 'held'].includes(b.status));
       if (!all.length) return `I couldn't find a booking for "${ns[1]}".`;
       if (!list.length) return `${all[0].customerName}'s booking is ${B.STATUS_WORDS[all[0].status].toLowerCase()}, so it can't be a no-show.`;
-      return await askOrRun(current.id, 'no_show', list, null);
+      const started = list.filter((b) => Date.parse(b.slotStart) <= Date.now());
+      if (!started.length) return `${list[0].customerName}'s appointment is ${list[0].slotLabel}, which hasn't started yet, so it can't be a no-show. If they canceled, cancel the booking instead.`;
+      return await askOrRun(current.id, 'no_show', started, null);
     }
     const done = t.match(new RegExp(`(?:done|finished)(?:\\s+(?:at|with))?\\s+${NAME}`)) || t.match(new RegExp(`${NAME}(?:'s)?\\s+(?:is|job is)\\s+(?:done|finished)`));
     if (done) {
