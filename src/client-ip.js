@@ -38,9 +38,12 @@ export function clientIp(req) {
 }
 
 // A limiter keyed on the visitor. Those headers can be faked where no Cloudflare sits in front, so a second,
-// looser bucket keyed on the connecting address (req.ip) caps what one source can do by rotating fake IPs:
+// much looser bucket keyed on the connecting address (req.ip) caps what one source can do by rotating fake IPs:
 // at most `backstop` times the normal limit, per route, per window.
-export function makeRateLimiter({ backstop = 10, onLimit } = {}) {
+// The visitor's own bucket is checked first, and the shared backstop is charged only for requests that pass it.
+// So one visitor hammering a route is stopped by their own limit and never uses up the bucket that everyone
+// coming through the same proxy address shares. The backstop is sized so ordinary visitors never reach it.
+export function makeRateLimiter({ backstop = 50, onLimit } = {}) {
   const hits = new Map();
   const take = (key, max, windowMs, now) => {
     const list = (hits.get(key) || []).filter((t) => now - t < windowMs);
@@ -58,8 +61,9 @@ export function makeRateLimiter({ backstop = 10, onLimit } = {}) {
     const where = scope(req);
     const visitor = clientIp(req);
     const conn = req.ip || req.socket?.remoteAddress || 'unknown';
-    const okConn = visitor === conn || take(`conn:${conn}:${where}`, max * backstop, windowMs, now);
-    if (!okConn || !take(`ip:${visitor}:${where}`, max, windowMs, now)) return onLimit ? onLimit(req, res) : res.status(429).json({ error: 'Too many messages, give it a minute.' });
+    const refuse = () => (onLimit ? onLimit(req, res) : res.status(429).json({ error: 'Too many messages, give it a minute.' }));
+    if (!take(`ip:${visitor}:${where}`, max, windowMs, now)) return refuse();
+    if (visitor !== conn && !take(`conn:${conn}:${where}`, max * backstop, windowMs, now)) return refuse();
     next();
   };
   limit._hits = hits;
