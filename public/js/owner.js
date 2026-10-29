@@ -333,12 +333,12 @@ $('#seed').addEventListener('click', async () => {
 });
 $('#reset-biz').addEventListener('click', async () => {
   const name = lastState?.business.name || 'this business';
-  if (!(await ask({ title: `Reset ${name}?`, text: `Clears ${name}'s demo bookings, texts and activity, then loads a fresh sample day. Other businesses are not touched, and any booking holding real PayPal sandbox money is kept.`, ok: 'Reset it', danger: true }))) return;
+  if (!(await ask({ title: `Reset ${name}?`, text: `Clears the bookings, texts and owner chat you made on ${name}, plus the sample day, then loads a fresh sample day. Other visitors' bookings and other businesses are not touched, and any booking with an open PayPal order, invoice, hold or real sandbox money is kept.`, ok: 'Reset it', danger: true }))) return;
   $('#reset-biz').disabled = true;
   try {
     const r = await api('/api/owner/reset-business', { method: 'POST', headers: hdr() });
     seenOwner = 0;
-    toast(`Reset. Fresh sample day loaded${r.kept ? ` (${r.kept} booking${r.kept === 1 ? '' : 's'} with real PayPal money kept)` : ''}.`);
+    toast(`Reset. Fresh sample day loaded${r.kept ? ` (${r.kept} other booking${r.kept === 1 ? '' : 's'} kept: other visitors' or with open PayPal money)` : ''}.`);
   } catch (err) {
     toast(err.message, 'bad');
   } finally {

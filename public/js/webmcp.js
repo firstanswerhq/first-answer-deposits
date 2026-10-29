@@ -1,5 +1,5 @@
 // WebMCP: the proposed browser standard (navigator.modelContext) that lets an AI assistant built into the
-// browser use a page through named tools instead of clicking around. PayPal is adopting it for Agent Ready.
+// browser use a page through named tools instead of clicking around. PayPal has said it is extending WebMCP support through its JavaScript SDK (developer.paypal.com/community/blog/WebMCP_PayPal_Agent_Ready).
 // Browsers without it ignore this file; nothing on the page depends on it.
 export function registerWebMcpTools(tools) {
   const ctx = typeof navigator !== 'undefined' ? navigator.modelContext : null;

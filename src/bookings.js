@@ -1454,7 +1454,7 @@ async function refundInvoicePayment(booking, invoiceId, invoice, txnId, amount, 
     store.addOwnerMessage('assistant', line, { presetId: booking.presetId, alert: true });
     return store.getBooking(booking.id);
   }
-  store.addTimeline(booking.id, `Invoice ${invoiceId} was paid (${usd(amount)}) after ${why}, so it was refunded automatically. PayPal refund ${refundId}${sim}.`);
+  store.addTimeline(booking.id, `Invoice ${invoiceId} was paid (${usd(amount)}${txnId ? `, PayPal payment ${txnId}` : ''}) after ${why}, so it was refunded automatically. PayPal refund ${refundId}${sim}.`);
   const line = `Heads up: ${booking.customerName} paid invoice ${invoiceId} (${usd(amount)}) after ${why}, so the AI refunded it automatically (reference ${refundId})${sim}. Nothing for you to do.`;
   store.logActivity(line, { bookingId: booking.id, kind: 'invoice_refund' });
   store.addOwnerMessage('assistant', line, { presetId: booking.presetId, alert: true });
