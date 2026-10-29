@@ -9,9 +9,9 @@ const PRESETS = [
 ];
 const CUSTOMER = { cleaning: ['Sarah', 'her'], detailing: ['Marcus', 'his'], hvac: ['Priya', 'her'], other: ['Alex', 'their'] };
 const PROMPTS = {
-  cleaning: ["Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah.", 'Did I pay yet?', 'Move it to Saturday afternoon'],
-  detailing: ["Full detail on my SUV this week, I'm Marcus", 'Is it confirmed?', 'Cancel it'],
-  hvac: ["AC tune-up for one system, next Tuesday morning, I'm Priya", 'What do I still owe?', 'Move it to Wednesday'],
+  cleaning: ["Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah.", 'Did I pay yet?', 'Pay the final bill and add a $20 tip', 'Move it to Saturday afternoon'],
+  detailing: ["Full detail on my SUV this week, I'm Marcus", 'Is it confirmed?', 'Pay the final bill and add a $15 tip', 'Cancel it'],
+  hvac: ["AC tune-up for one system, next Tuesday morning, I'm Priya", 'What do I still owe?', 'Pay the final bill', 'Move it to Wednesday'],
   other: ['Book me the first open time this week. I\'m Alex.', 'Is it confirmed?', 'Move it to tomorrow'],
 };
 
@@ -69,26 +69,43 @@ function typing(on) {
 // The human-approval card. Polls the payment so the card flips to "paid" when they approve in the other tab.
 function approvalCard(approval) {
   const paymentId = approval.url.split('/p/')[1] || '';
-  // One card per deposit: a status check or a move brings the same link back, not a new one.
+  // One card per payment: a status check or a move brings the same link back, not a new one.
   const existing = paymentId && document.querySelector(`.approve[data-payment="${paymentId}"]`);
   if (existing) {
     $('#thread').appendChild(existing);
     $('#thread').scrollTop = $('#thread').scrollHeight;
     return;
   }
+  const bill = approval.label === 'Final bill';
   const card = document.createElement('div');
   card.className = 'approve';
   card.dataset.payment = paymentId;
+  card.dataset.booking = approval.bookingId || '';
+  card.dataset.kind = bill ? 'balance' : 'deposit';
   card.innerHTML = `
     <div class="row">
-      <div><div class="label">Deposit to hold the time</div><div class="amount">${money(approval.amount)}</div></div>
-      <span class="status held">Held · waiting on you</span>
+      <div><div class="label">${bill ? 'Final bill, needs your OK' : 'Deposit to hold the time'}</div><div class="amount">${money(approval.amount)}</div></div>
+      <span class="status held">${bill ? 'Waiting on you' : 'Held · waiting on you'}</span>
     </div>
-    <a class="btn primary" href="${escapeHtml(approval.url)}" target="_blank" rel="noopener">Approve the ${money(approval.amount)} deposit in <span class="pp">PayPal</span></a>
-    <p class="fine"><strong>The assistant can't pay. Only you can.</strong> PayPal, Venmo, Pay Later or a card, no account needed. The deposit counts toward the bill.</p>`;
+    <a class="btn primary" href="${escapeHtml(approval.url)}" target="_blank" rel="noopener">Approve the ${money(approval.amount)} ${bill ? 'bill' : 'deposit'} in <span class="pp">PayPal</span></a>
+    <p class="fine"><strong>${bill ? "It's outside what you let the assistant pay, so only you can approve it." : "The assistant can't pay the deposit. Only you can."}</strong> PayPal, Venmo, Pay Later or a card, no account needed.${bill ? '' : ' On the PayPal page you can also let the assistant pay the final bill later, up to a limit you pick.'}</p>`;
   $('#thread').appendChild(card);
   $('#thread').scrollTop = $('#thread').scrollHeight;
   watchPayment(card);
+}
+
+// Demo businesses only: play the business's side (mark the job done) so the final-bill step can be tried here.
+async function finishJob(card, btn) {
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/owner/bookings/${encodeURIComponent(card.dataset.booking)}/done`, { method: 'POST', headers: { 'x-biz': bizId } });
+    const due = r.result?.due;
+    btn.remove();
+    bubble('assistant', `The business marked the job done and sent the final bill${due ? ` (${money(due)})` : ''}. Want me to pay it? Try "Pay the final bill and add a $20 tip".`);
+  } catch (err) {
+    btn.disabled = false;
+    bubble('assistant', err.message);
+  }
 }
 
 function watchPayment(card) {
@@ -100,16 +117,28 @@ function watchPayment(card) {
       const r = await api(`/api/pay/${id}`);
       if (r.payment.status === 'completed') {
         clearInterval(watching);
+        const held = r.payment.held === 'authorized';
+        const limit = r.booking.assistantLimit;
         card.classList.add('paid');
         card.querySelector('.status').className = 'status confirmed';
-        card.querySelector('.status').textContent = 'Paid · confirmed';
+        card.querySelector('.status').textContent = held ? 'Held in PayPal · confirmed' : 'Paid · confirmed';
         card.querySelector('.btn').outerHTML = `<a class="btn secondary" href="${escapeHtml(r.bookingUrl)}" target="_blank" rel="noopener">View the booking</a>`;
-        card.querySelector('.fine').innerHTML = `<strong>You approved ${money(r.payment.amount)} in PayPal.</strong> ${escapeHtml(r.booking.appointment)} is confirmed. The business saw it the same second.`;
-        bubble('assistant', `Your ${money(r.payment.amount)} deposit went through. ${r.booking.appointment} is confirmed.`);
+        const limitLine = limit && limit.status === 'active' ? `<p class="limit-note">You let me pay the final bill and tip for this booking, up to ${money(limit.limit)}${limit.simulated ? ' (demo: simulated)' : ''}.</p>` : '';
+        const isDeposit = card.dataset.kind === 'deposit';
+        card.querySelector('.fine').outerHTML = `<p class="fine"><strong>You approved ${money(r.payment.amount)} in PayPal${held ? ' as a hold' : ''}.</strong> ${escapeHtml(r.booking.appointment)} is confirmed.${held ? ' Nothing is charged until the job is done; a free cancel releases it.' : ''} The business saw it the same second.</p>${limitLine}`;
+        if (isDeposit && PRESETS.some((b) => b.id === bizId) && r.booking.status === 'confirmed') {
+          const skip = document.createElement('button');
+          skip.type = 'button';
+          skip.className = 'skip';
+          skip.textContent = 'Skip ahead (demo): the business finishes the job';
+          skip.addEventListener('click', () => finishJob(card, skip));
+          card.appendChild(skip);
+        }
+        bubble('assistant', isDeposit ? `Your ${money(r.payment.amount)} deposit went through${held ? ' as a hold on your PayPal' : ''}. ${r.booking.appointment} is confirmed.` : `Thanks, the final bill is paid. You're all set.`);
       } else if (['void', 'canceled'].includes(r.payment.status)) clearInterval(watching);
     } catch {}
   };
-  watching = setInterval(check, 4000);
+  watching = setInterval(check, 3000);
 }
 
 // ---------- protocol trace ----------
@@ -145,6 +174,12 @@ function summarize(tool, r) {
       return `${kv(r, ['moved', 'from'])}  <span class="k">to</span> ${escapeHtml(short(r.appointment))}  ${kv(r, ['paid'])}`;
     case 'cancel_booking':
       return kv(r, ['canceled', 'outcome', 'refunded', 'kept']);
+    case 'pay_balance': {
+      const c = r.limit_check;
+      const words = { within_limit_pay: 'within the limit: paid, no human needed', over_limit_ask_human: 'over the limit: asks the human', no_limit_ask_human: 'no limit granted: asks the human' };
+      const line = c ? `<span class="limit ${c.decision === 'within_limit_pay' ? 'ok' : 'stop'}">limit check · limit ${escapeHtml(money(c.limit))} · spent ${escapeHtml(money(c.already_spent))} · this ${escapeHtml(money(c.this_payment))} &rarr; ${escapeHtml(words[c.decision] || c.decision)}${c.simulated ? ' (demo: simulated)' : ''}</span>` : '';
+      return `${kv(r, ['payment_made', 'reason', 'amount', 'status'])}${line}`;
+    }
     default:
       return escapeHtml(
         Object.entries(r)
@@ -165,7 +200,7 @@ const argsLine = (args) =>
 function addCall(entry, { animate = true } = {}) {
   $('#trace-empty')?.remove();
   const li = document.createElement('li');
-  li.className = `rpc${entry.error ? ' err' : ''}`;
+  li.className = `rpc${entry.error ? ' err' : ''}${entry.tool === 'pay_balance' ? ' limit-rpc' : ''}`;
   if (!animate) li.style.animation = 'none';
   li.innerHTML = `
     <div class="ln"><span class="arrow">&rarr;</span><span class="args"><span class="tool">${escapeHtml(entry.tool)}</span> ${argsLine(entry.args)}</span><span class="t">${clockNow()}</span></div>

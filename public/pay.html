@@ -33,6 +33,10 @@
       </div>
 
       <div id="pay-area">
+        <div id="mandate-box" class="mandate hidden">
+          <label class="mandate-row"><input type="checkbox" id="mandate-on" /> <span>Also let <strong id="mandate-agent">your assistant</strong> pay the final bill and tip for this booking, up to <span class="mandate-amt">$<input id="mandate-limit" inputmode="decimal" aria-label="Spending limit in dollars" /></span>, without asking me again.</span></label>
+          <p class="small muted" id="mandate-fine">Only this booking. PayPal saves your wallet with your OK, and the assistant can never pay more than this. Anything above it comes back to you to approve.</p>
+        </div>
         <div id="paylater-message" style="margin-top: 16px"></div>
         <div id="paypal-buttons"></div>
         <button class="btn primary hidden" id="demo-pay" style="width: 100%; margin-top: 14px">Pay now (demo checkout)</button>

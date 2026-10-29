@@ -2,7 +2,13 @@ import { api, money, linkify, listen, $, speechKit, escapeHtml, applyBrand } fro
 import { registerWebMcpTools } from './webmcp.js';
 
 const paymentId = location.pathname.split('/').pop();
-const state = { data: null, tip: 0, sdkLoaded: false, rendered: false, speaking: false };
+const state = { data: null, tip: 0, sdkLoaded: false, rendered: false, speaking: false, mandate: false };
+// The spending limit the customer offers their assistant (only on a deposit an assistant booked).
+const mandateBody = () => {
+  if (!state.mandate || !state.data?.mandateOffer) return null;
+  const limit = Number(String($('#mandate-limit').value).replace(/[^0-9.]/g, ''));
+  return limit > 0 ? { limit: Math.min(limit, state.data.mandateOffer.max) } : null;
+};
 
 function firstName(n) {
   return String(n || '').trim().split(/\s+/)[0] || '';
@@ -25,7 +31,8 @@ function render() {
   const due = payment.amount + (payment.kind === 'balance' ? state.tip : 0);
   const rows = [];
   rows.push(['Total for the job', money(t.total)]);
-  if (t.paid > 0) rows.push(['Already paid', money(t.paid)]);
+  if (t.onHold > 0) rows.push(['Deposit held in PayPal (not charged yet)', money(t.onHold)]);
+  if (t.paid - (t.onHold || 0) > 0) rows.push(['Already paid', money(t.paid - (t.onHold || 0))]);
   if (payment.kind === 'deposit') {
     // Once this deposit is paid it is already inside t.paid, so only subtract it while it is still due.
     const stillDue = payment.status === 'pending' ? payment.amount : 0;
@@ -35,9 +42,10 @@ function render() {
   rows.push([payment.status === 'completed' ? 'Paid' : 'Due now', money(due), 'due']);
   $('#money-rows').innerHTML = rows.map(([k, v, c]) => `<li class="${c || ''}"><span>${escapeHtml(k)}</span><strong>${v}</strong></li>`).join('');
 
+  const hold = payment.kind === 'deposit' && payment.intent === 'authorize';
   $('#policy-note').innerHTML =
     payment.kind === 'deposit'
-      ? `The deposit counts toward your total. Free to cancel or move until <strong>${escapeHtml(booking.freeCancelUntil)}</strong>. Rescheduling is always free.`
+      ? `${hold ? 'This deposit is a <strong>hold</strong>: PayPal sets it aside on your account and nothing is charged until the job is done (or a late cancel or no-show). ' : 'The deposit counts toward your total. '}Free to cancel or move until <strong>${escapeHtml(booking.freeCancelUntil)}</strong>${hold ? ', and canceling by then releases the hold' : ''}. Rescheduling is always free.`
       : `Total ${money(t.total)} minus the ${money(t.paid)} you already paid. Questions about the bill? Ask on the right.`;
 
   if (payment.kind === 'balance' && payment.status === 'pending') {
@@ -48,6 +56,13 @@ function render() {
       .join('');
   }
 
+  const offer = state.data.mandateOffer;
+  $('#mandate-box').classList.toggle('hidden', !offer || payment.status !== 'pending');
+  if (offer) {
+    $('#mandate-agent').textContent = offer.agent;
+    if (!$('#mandate-limit').value) $('#mandate-limit').value = offer.suggested;
+    $('#mandate-fine').textContent = `Only this booking. ${state.data.paypal ? 'PayPal saves your wallet with your OK (pay with the PayPal button to turn this on)' : 'Demo checkout: the saved wallet is simulated'}, and the assistant can never pay more than this. Anything above it comes back to you to approve.`;
+  }
   const finished = payment.status === 'completed' || (payment.kind === 'deposit' && ['confirmed', 'paid_in_full', 'completed'].includes(booking.status));
   if (finished) return showDone();
   if (['canceled', 'refunded', 'no_show'].includes(booking.status) && payment.status !== 'completed') {
@@ -79,8 +94,9 @@ function showDone() {
   $('#tip-box').classList.add('hidden');
   $('#done').classList.remove('hidden');
   if (payment.kind === 'deposit') {
+    const lim = booking.assistantLimit && booking.assistantLimit.status === 'active' ? ` ${booking.bookedBy || 'Your assistant'} may pay the final bill and tip, up to ${money(booking.assistantLimit.limit)}.` : '';
     $('#done-title').textContent = "You're confirmed!";
-    $('#done-sub').textContent = `${booking.appointment}. Free to cancel or move until ${booking.freeCancelUntil}.`;
+    $('#done-sub').textContent = `${booking.appointment}.${payment.held === 'authorized' ? ' Your deposit is held in PayPal, not charged until the job is done.' : ''} Free to cancel or move until ${booking.freeCancelUntil}.${lim}`;
   } else {
     $('#done-title').textContent = 'All paid up. Thank you!';
     $('#done-sub').textContent = 'Your receipt is on your booking page.';
@@ -110,7 +126,8 @@ async function setupPayment() {
   }
   try {
     if (!state.sdkLoaded) {
-      const params = new URLSearchParams({ 'client-id': pp.clientId, currency: 'USD', intent: 'capture', components: 'buttons,messages', 'enable-funding': 'venmo,paylater' });
+      // A deposit hold is an AUTHORIZE order, and the SDK has to be loaded with the matching intent.
+      const params = new URLSearchParams({ 'client-id': pp.clientId, currency: 'USD', intent: payment.intent === 'authorize' ? 'authorize' : 'capture', components: 'buttons,messages', 'enable-funding': 'venmo,paylater' });
       if (pp.env === 'sandbox') params.set('buyer-country', 'US');
       await loadScript(`https://www.paypal.com/sdk/js?${params}`);
       state.sdkLoaded = true;
@@ -118,33 +135,35 @@ async function setupPayment() {
     renderPayLaterMessage();
     if (state.rendered) return;
     state.rendered = true;
-    await window.paypal
-      .Buttons({
-        style: { layout: 'vertical', shape: 'rect', label: 'pay', height: 48 },
-        createOrder: async () => {
-          const r = await api(`/api/pay/${paymentId}/order`, { method: 'POST', body: { tip: state.tip } });
-          if (r.paid) throw new Error('Already paid');
-          return r.orderId;
-        },
-        onApprove: async (data) => {
-          $('#pay-error').textContent = '';
-          const r = await api(`/api/pay/${paymentId}/capture`, { method: 'POST', body: { orderID: data?.orderID } });
-          await load();
-          if (r.status !== 'completed') $('#pay-error').textContent = 'PayPal is still finishing up. This page will update by itself.';
-        },
-        onCancel: () => say(`No problem, nothing was charged. ${payment.kind === 'deposit' ? 'Your time is held for a little while, so take your time.' : ''} Any questions?`),
-        onError: (err) => {
-          console.error(err);
-          $('#pay-error').textContent = "That didn't go through and nothing was charged. Try again, or pick another way to pay.";
-        },
-      })
-      .render('#paypal-buttons');
+    $('#paypal-buttons').innerHTML = '';
+    const opts = {
+      style: { layout: 'vertical', shape: 'rect', label: 'pay', height: 48 },
+      createOrder: async () => {
+        const r = await api(`/api/pay/${paymentId}/order`, { method: 'POST', body: { tip: state.tip, mandate: mandateBody() } });
+        if (r.paid) throw new Error('Already paid');
+        return r.orderId;
+      },
+      onApprove: async (data) => {
+        $('#pay-error').textContent = '';
+        const r = await api(`/api/pay/${paymentId}/capture`, { method: 'POST', body: { orderID: data?.orderID } });
+        await load();
+        if (r.status !== 'completed') $('#pay-error').textContent = 'PayPal is still finishing up. This page will update by itself.';
+      },
+      onCancel: () => say(`No problem, nothing was charged. ${payment.kind === 'deposit' ? 'Your time is held for a little while, so take your time.' : ''} Any questions?`),
+      onError: (err) => {
+        console.error(err);
+        $('#pay-error').textContent = "That didn't go through and nothing was charged. Try again, or pick another way to pay.";
+      },
+    };
+    // Saving the wallet for the assistant's limit is a PayPal-wallet order, so only the PayPal button is shown then.
+    if (state.mandate) opts.fundingSource = window.paypal.FUNDING.PAYPAL;
+    await window.paypal.Buttons(opts).render('#paypal-buttons');
   } catch (err) {
     console.error(err);
     // Fallback: send them to PayPal's own page and back.
     $('#paypal-buttons').innerHTML = '<button class="btn primary" id="pp-redirect" style="width:100%">Pay with PayPal</button>';
     $('#pp-redirect').onclick = async () => {
-      const r = await api(`/api/pay/${paymentId}/order`, { method: 'POST', body: { tip: state.tip, redirect: true } });
+      const r = await api(`/api/pay/${paymentId}/order`, { method: 'POST', body: { tip: state.tip, redirect: true, mandate: mandateBody() } });
       if (r.url) location.href = r.url;
     };
   }
@@ -237,8 +256,16 @@ function wire() {
   });
   $('#demo-pay').addEventListener('click', async () => {
     $('#demo-pay').disabled = true;
-    await api(`/api/pay/${paymentId}/capture`, { method: 'POST', body: { tip: state.tip } });
+    await api(`/api/pay/${paymentId}/capture`, { method: 'POST', body: { tip: state.tip, mandate: mandateBody() } });
     await load();
+  });
+  $('#mandate-on').addEventListener('change', () => {
+    state.mandate = $('#mandate-on').checked;
+    // Re-draw the PayPal buttons: with the limit on, only the PayPal wallet can be saved.
+    if (state.data?.paypal && state.rendered) {
+      state.rendered = false;
+      setupPayment();
+    }
   });
   const mic = $('#mic');
   if (!kit) mic.classList.add('hidden');

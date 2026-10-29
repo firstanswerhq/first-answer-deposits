@@ -229,3 +229,11 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .feature p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
 .icon { width: 38px; height: 38px; border-radius: 10px; background: var(--info-bg); color: var(--brand-1); display: grid; place-items: center; font-size: 18px; }
 footer { text-align: center; color: var(--muted); font-size: 13px; padding: 24px 16px; }
+
+/* Pay page: the optional spending limit for the customer's AI assistant. */
+.mandate { margin-top: 16px; border: 1px solid #d8dcff; background: #f6f7ff; border-radius: 12px; padding: 12px 14px; }
+.mandate-row { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.45; cursor: pointer; }
+.mandate-row input[type=checkbox] { margin-top: 3px; width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--brand-1); }
+.mandate-amt { white-space: nowrap; font-weight: 700; }
+.mandate-amt input { width: 70px; border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; font: inherit; font-weight: 700; }
+.mandate p { margin: 6px 0 0 28px; }

@@ -112,3 +112,11 @@ footer { color: #8b90b8; }
   .lede { font-size: 14px; margin-bottom: 10px; }
   .chat, .trace { height: calc(100vh - 262px); min-height: 440px; }
 }
+/* The spending-limit check on pay_balance: the line a judge should see. */
+.rpc .limit { display: block; margin-top: 4px; padding: 4px 8px; border-radius: 8px; font-weight: 700; }
+.rpc .limit.ok { background: rgba(80, 200, 130, 0.14); color: #a8f0c4; }
+.rpc .limit.stop { background: rgba(255, 190, 90, 0.14); color: #ffd79a; }
+.rpc.limit-rpc { border-left-color: #7ee2a8; }
+.approve .skip { display: block; width: 100%; margin-top: 8px; background: none; border: 1px dashed #c9cdf2; color: var(--muted); border-radius: 10px; padding: 8px; font-size: 12.5px; cursor: pointer; }
+.approve .skip:hover { color: var(--ink); border-color: var(--brand-1); }
+.approve .limit-note { margin: 8px 0 0; font-size: 12.5px; color: #1f7a45; font-weight: 600; }

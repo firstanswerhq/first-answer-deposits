@@ -62,7 +62,7 @@ function kpis(s) {
     ['Avg first reply', s.avgFirstReplySec === null ? '—' : s.avgFirstReplySec < 1 ? '&lt;1s' : `${s.avgFirstReplySec}s`],
     ['Deposits waiting', s.held],
     ['Confirmed', s.confirmed],
-    ['Money in (30 days)', money(s.money.gross)],
+    ['Money in (30 days)', `${money(s.money.gross)}${s.money.onHold ? `<div class="small muted" style="font-size:12px;font-weight:600">+ ${money(s.money.onHold)} held in PayPal</div>` : ''}`],
     ['Still owed', money(s.money.stillOwed)],
   ];
   $('#kpis').innerHTML = tiles.map(([l, v]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
@@ -82,8 +82,11 @@ function bookings(list) {
     '<tr><th>Customer</th><th>Appointment</th><th>Status</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Owed</th><th></th></tr>' +
     list
       .map((b) => {
-        const acts = (ACTIONS[b.status] || []).filter(([a]) => a !== 'refund' || refundable(b)).map(([a, label]) => `<button class="btn secondary small" data-act="${a}" data-id="${b.id}">${label}</button>`).join('');
-        return `<tr><td><strong>${escapeHtml(b.customerName)}</strong><div class="small muted">${escapeHtml(b.title || b.service)}</div></td>
+        const demoDispute = lastState?.health.paypal === 'demo mode' && refundable(b) && !(b.disputes || []).length ? [['demo-dispute', 'Test a dispute']] : [];
+        const acts = [...(ACTIONS[b.status] || []), ...demoDispute].filter(([a]) => a !== 'refund' || refundable(b)).map(([a, label]) => `<button class="btn secondary small" data-act="${a}" data-id="${b.id}">${label}</button>`).join('');
+        const limit = b.assistantLimit && ['active', 'used'].includes(b.assistantLimit.status) ? `<div class="small" style="color:#1f7a45">${escapeHtml(b.bookedBy || 'Assistant')} may pay up to ${money(b.assistantLimit.limit)}${b.assistantLimit.spent ? ` (${money(b.assistantLimit.spent)} paid)` : ''}</div>` : '';
+        const dispute = (b.disputes || []).length ? `<div class="small" style="color:#9a5b00">Dispute: ${escapeHtml(b.disputes.at(-1).status.replace(/_/g, ' '))}</div>` : '';
+        return `<tr><td><strong>${escapeHtml(b.customerName)}</strong><div class="small muted">${escapeHtml(b.title || b.service)}</div>${limit}${dispute}</td>
           <td>${escapeHtml(b.appointment)}</td>
           <td><span class="status ${b.status}">${escapeHtml(b.statusWords)}</span></td>
           <td class="num">${money(b.totals.total)}</td><td class="num">${money(b.totals.paid)}${b.totals.tips ? `<div class="small muted">+${money(b.totals.tips)} tip</div>` : ''}${b.totals.refunded || b.totals.tipsRefunded ? `<div class="small muted">${money(b.totals.refunded + b.totals.tipsRefunded)} refunded</div>` : ''}</td><td class="num">${CLOSED.includes(b.status) ? '<span class="muted" title="Closed: nothing owed">—</span>' : b.status === 'held' ? `${money(b.owedNow)}<div class="small muted">deposit now</div>` : money(b.totals.due)}${b.hold ? `<div class="small muted">${escapeHtml(b.hold)}</div>` : ''}</td>
@@ -270,7 +273,9 @@ $('#bookings').addEventListener('click', async (e) => {
   if (act === 'refund') {
     const okRefund = await ask({
       title: `Refund ${name}?`,
-      text: bk && bk.totals.tips > 0
+      text: bk && bk.totals.onHold > 0 && bk.totals.onHold + 0.001 >= bk.totals.paid
+        ? `${money(bk.totals.onHold)} is a deposit hold in PayPal, not charged yet. Refunding releases the hold, so ${name} is never charged, and they get a text.`
+        : bk && bk.totals.tips > 0
         ? `Full refund: the ${money(bk.totals.paid)} they paid plus the ${money(bk.totals.tips)} tip (${money(bk.totals.paid + bk.totals.tips)} in all) goes back through PayPal to the account they paid with, and they get a text with the reference number.`
         : `${money(bk ? bk.totals.paid : 0)} goes back through PayPal to the account they paid with, and they get a text with the reference number.`,
       ok: 'Refund',
@@ -289,10 +294,14 @@ $('#bookings').addEventListener('click', async (e) => {
     if (reason === null) return;
     body.reason = reason;
   }
+  if (act === 'demo-dispute') {
+    const go = await ask({ title: `Test a dispute on ${name}'s payment?`, text: 'Plays a PayPal dispute on this demo booking so you can watch the AI send the evidence file. Demo only: no PayPal call.', ok: 'Open a test dispute' });
+    if (!go) return;
+  }
   b.disabled = true;
   try {
     await api(`/api/owner/bookings/${id}/${act}`, { method: 'POST', body, headers: hdr() });
-    toast({ remind: `Reminder sent to ${name}.`, refund: bk && bk.totals.tips > 0 ? `Refunded ${money(bk.totals.paid + bk.totals.tips)} to ${name}, tip included.` : `Refund sent to ${name}.`, done: `Marked done. ${name} got the balance link.`, cancel: `${name} got new times and a refund option.`, release: `Released ${name}'s hold.`, cash: `Recorded the payment from ${name}.` }[act] || 'Done.');
+    toast({ remind: `Reminder sent to ${name}.`, refund: bk && bk.totals.tips > 0 ? `Refunded ${money(bk.totals.paid + bk.totals.tips)} to ${name}, tip included.` : `Refund sent to ${name}.`, done: `Marked done. ${name} got the balance link.`, cancel: `${name} got new times and a refund option.`, release: `Released ${name}'s hold.`, cash: `Recorded the payment from ${name}.`, 'demo-dispute': `Test dispute opened. The AI sent the evidence file (simulated). See Live activity.` }[act] || 'Done.');
   } catch (err) {
     toast(err.message, 'bad');
   }
