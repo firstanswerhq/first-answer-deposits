@@ -477,6 +477,8 @@ export async function bookAndRequestDeposit({ leadId, serviceId, size, slotStart
   const booking = store.createBooking({
     leadId: lead.id,
     presetId: business.id,
+    // The demo visitor who made it (see visitor.js), so their Reset demo clears it and nobody else's.
+    ...(lead.visitorId ? { visitorId: lead.visitorId } : {}),
     customerName: customerName || lead.name || 'Customer',
     customerEmail: customerEmail || lead.email || '',
     customerPhone: lead.phone || '',

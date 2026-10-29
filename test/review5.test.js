@@ -147,3 +147,31 @@ test('a done job owing money with no open link gets one (remind and pay_balance 
   assert.equal(fresh.amount, B.totals(nb).due);
   assert.equal((await B.payWithMandate(b.id, { agent: 'Claude' })).paid, true);
 });
+
+// ---------- 7. the agent demo under load ----------
+const CHIP = "Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah.";
+const sid = () => `r5-${Math.random().toString(36).slice(2)}`;
+test('the agent demo keeps booking past 20 a minute and with 8 visitors at once (internal MCP calls skip the public limit)', async () => {
+  store.resetAll();
+  const seq = [];
+  for (let i = 0; i < 26; i++) seq.push(await call('POST', '/api/assistant', { body: { sessionId: sid(), text: CHIP, bizId: 'cleaning' } }));
+  assert.deepEqual(seq.filter((r) => !r.data.approval).map((r) => r.data.reply || r.data.error), [], 'every sequential visitor reaches the PayPal approval');
+  const conc = await Promise.all(Array.from({ length: 8 }, () => call('POST', '/api/assistant', { body: { sessionId: sid(), text: CHIP, bizId: 'cleaning' } })));
+  assert.deepEqual(conc.filter((r) => !r.data.approval).map((r) => r.data.reply || r.data.error), [], 'every simultaneous visitor reaches the PayPal approval');
+  const active = store.listBookings().filter((b) => b.status === 'held');
+  assert.equal(new Set(active.map((b) => b.slotStart)).size, active.length, 'no time double-booked');
+});
+
+test('outside MCP callers keep the public limit (a fake internal header does not help); errors never show raw JSON-RPC', async () => {
+  const { friendlyError } = await import('../src/agentic/assistant.js');
+  const body = { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} };
+  let last;
+  for (let i = 0; i < 125; i++) {
+    const res = await fetch(`${base}/mcp/cleaning`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'x-forwarded-for': '10.99.1.1', 'x-fad-internal': 'guess' }, body: JSON.stringify(body) });
+    last = res.status;
+    await res.text();
+  }
+  assert.equal(last, 429);
+  assert.doesNotMatch(friendlyError('Streamable HTTP error: Error POSTing to endpoint: {"jsonrpc":"2.0","error":{"code":-32000,"message":"Too many requests."},"id":null}'), /jsonrpc|\{/);
+  assert.match(friendlyError('MCP error -32602: That time is no longer open. Offer other times.'), /no longer open/);
+});

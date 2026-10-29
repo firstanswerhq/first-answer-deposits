@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getModel } from '../agent/model.js';
 import { parseName, bareName } from '../agent/names.js';
+import { internalHeaders } from '../visitor.js';
 
 export { parseName };
 
@@ -45,9 +46,9 @@ function session(id, bizId) {
 
 // ---------- MCP client over HTTP ----------
 // Every call is recorded for the protocol trace the page shows: tool, args, result.
-async function connect(url, trace) {
+async function connect(url, trace, headers = {}) {
   const client = new Client({ name: 'customer-assistant', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }));
   return {
     client,
     async call(tool, args = {}) {
@@ -229,9 +230,9 @@ function pickOffered(session, text) {
 // ---------- the scripted planner ----------
 // Same tools, same order a model would use: info -> quote -> availability -> book. One short follow-up when
 // something is missing; the session remembers what it has learned so far.
-async function scriptedTurn(s, text, url, trace) {
+async function scriptedTurn(s, text, url, trace, headers) {
   const t = lower(text);
-  const mcp = await connect(url, trace);
+  const mcp = await connect(url, trace, headers);
   try {
     if (!s.info) s.info = await mcp.call('get_business_info', {});
     const biz = s.info;
@@ -359,11 +360,17 @@ async function scriptedTurn(s, text, url, trace) {
     let slot = f.slot || null;
     let swapped = null; // set when the exact time asked for was taken and the nearest open one was held instead
     const tried = new Set();
-    const findSlot = async () => {
+    // retry > 0: a time just got taken; pick at random among the few nearest open times.
+    const findSlot = async (retry = 0) => {
       const av = await mcp.call('check_availability', { day: f.day && f.day !== 'any' ? f.day : undefined, count: 8 });
-      const pick = chooseSlot(av.slots.filter((x) => !tried.has(x.start)), f.day, f.when);
-      if (pick.slot) return pick.slot;
-      let near = pick.nearest;
+      const open = av.slots.filter((x) => !tried.has(x.start));
+      const pick = chooseSlot(open, f.day, f.when);
+      if (pick.slot && !retry) return pick.slot;
+      let near = retry ? null : pick.nearest;
+      if (retry) {
+        const pool = (open.length ? open : (await mcp.call('check_availability', { count: 8 })).slots.filter((x) => !tried.has(x.start))).slice(0, 3);
+        near = pool[Math.floor(Math.random() * pool.length)] || null;
+      }
       if (!near) near = (await mcp.call('check_availability', { count: 6 })).slots.find((x) => !tried.has(x.start)) || null;
       if (near) swapped = near;
       return near;
@@ -380,16 +387,19 @@ async function scriptedTurn(s, text, url, trace) {
       ...(f.budget ? { max_total: f.budget } : {}),
       agent_name: agentName(),
     });
+    // Someone else can take a time between the availability check and the booking (many visitors try the demo at
+    // once): try the next open time, a few times, picking among the nearest ones so racing visitors spread out.
     let r;
-    try {
-      r = await mcp.call('book_appointment', bookArgs(slot.start));
-    } catch (err) {
-      // Someone else took that time between the availability check and the booking: take the next nearest once.
-      if (!/no longer open/i.test(err.message)) throw err;
-      tried.add(slot.start);
-      slot = await findSlot();
-      if (!slot) return { reply: `${biz.name} has nothing open in the next three weeks. Want me to try another business?`, approval: null };
-      r = await mcp.call('book_appointment', bookArgs(slot.start));
+    for (let attempt = 0; ; attempt++) {
+      try {
+        r = await mcp.call('book_appointment', bookArgs(slot.start));
+        break;
+      } catch (err) {
+        if (!/no longer open/i.test(err.message) || attempt >= 7) throw err;
+        tried.add(slot.start);
+        slot = await findSlot(attempt + 1);
+        if (!slot) return { reply: `${biz.name} has nothing open in the next three weeks. Want me to try another business?`, approval: null };
+      }
     }
     if (!r.booked) {
       s.pending = 'budget';
@@ -418,8 +428,8 @@ async function scriptedTurn(s, text, url, trace) {
 }
 
 // ---------- the model planner (needs an AI key) ----------
-async function modelTurn(s, text, url, trace, model) {
-  const mcp = await createMCPClient({ transport: { type: 'http', url } });
+async function modelTurn(s, text, url, trace, model, headers) {
+  const mcp = await createMCPClient({ transport: { type: 'http', url, headers } });
   try {
     const tools = await mcp.tools();
     const messages = s.history.slice(-20).map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
@@ -465,24 +475,36 @@ Style: 1 to 3 short plain sentences, no markdown, no lists.`,
 }
 
 // ---------- one turn ----------
-export async function assistantTurn({ sessionId, text, bizId, base }) {
+// What the human sees when the booking system errors: its plain-words message, never raw JSON-RPC or HTTP noise.
+export function friendlyError(message) {
+  const m = String(message || '').replace(/^MCP error -?\d+:\s*/i, '').trim();
+  if (!m || /jsonrpc|^\s*[{[]|HTTP error|Error POSTing|status code|ECONN|fetch failed|429|Too many requests|Internal server error|-32\d{3}/i.test(m)) {
+    return "The business's booking system is busy right now, so nothing was booked or charged. Please try again in a minute.";
+  }
+  return `The business's booking system said: ${m}`;
+}
+
+export async function assistantTurn({ sessionId, text, bizId, base, visitorId = null }) {
   const s = session(sessionId, bizId);
   const url = `${base}/mcp/${s.bizId}`;
+  // This demo assistant runs inside the server: its MCP calls carry the internal secret (no shared public rate
+  // limit) and the visitor's id (so their Reset demo clears what they booked). See visitor.js.
+  const headers = internalHeaders(visitorId);
   const trace = [];
   s.history.push({ role: 'user', text, at: new Date().toISOString() });
   const m = getModel();
   let out;
   try {
-    out = m ? await modelTurn(s, text, url, trace, m.model) : await scriptedTurn(s, text, url, trace);
+    out = m ? await modelTurn(s, text, url, trace, m.model, headers) : await scriptedTurn(s, text, url, trace, headers);
   } catch (err) {
     if (m) {
       console.error(`Assistant model failed (${m.name}): ${err.message}. Using the scripted planner.`);
       try {
-        out = await scriptedTurn(s, text, url, trace);
+        out = await scriptedTurn(s, text, url, trace, headers);
       } catch (err2) {
-        out = { reply: `The business's booking system said: ${err2.message}`, approval: null };
+        out = { reply: friendlyError(err2.message), approval: null };
       }
-    } else out = { reply: `The business's booking system said: ${err.message}`, approval: null };
+    } else out = { reply: friendlyError(err.message), approval: null };
   }
   s.history.push({ role: 'assistant', text: out.reply, at: new Date().toISOString(), approval: out.approval || null });
   s.trace.push(...trace);

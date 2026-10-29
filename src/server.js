@@ -1,4 +1,5 @@
 import express from 'express';
+import { visitorMiddleware } from './visitor.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, paypalReady, aiReady } from './config.js';
@@ -42,6 +43,7 @@ app.post('/api/webhooks/paypal', express.raw({ type: '*/*', limit: '1mb' }), asy
 });
 
 app.use(express.json({ limit: '100kb' }));
+app.use(visitorMiddleware);
 mountAgentic(app);
 app.use(express.static(pub, { extensions: ['html'] }));
 
@@ -138,6 +140,7 @@ app.post('/api/text/start', wrap(async (req, res) => {
   // No business named: the default demo one, never whichever business someone opened last.
   const presetId = B.businessById(req.body.presetId) ? req.body.presetId : defaultPresetId;
   const lead = store.createLead({ channel: req.body.channel || 'text', presetId, phone: req.body.phone || '' });
+  if (req.visitorId) store.updateLead(lead.id, { visitorId: req.visitorId });
   res.json({ leadId: lead.id, business: B.businessById(presetId).name, brand: brandOf(B.businessById(presetId)) });
 }));
 

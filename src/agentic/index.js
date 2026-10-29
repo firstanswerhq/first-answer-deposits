@@ -5,7 +5,7 @@
 import * as B from '../bookings.js';
 import { mountMcp, baseFor, cors } from './mcp.js';
 import { mountDiscovery } from './discovery.js';
-import { assistantTurn, getSession, agentName } from './assistant.js';
+import { assistantTurn, getSession, agentName, friendlyError } from './assistant.js';
 import { getModel } from '../agent/model.js';
 import { makeRateLimiter } from '../client-ip.js';
 
@@ -43,10 +43,10 @@ export function mountAgentic(app) {
     if (!sessionId || !text) return res.status(400).json({ error: 'sessionId and text are required.' });
     const bizId = req.body?.bizId && B.businessById(String(req.body.bizId)) ? String(req.body.bizId) : undefined;
     try {
-      res.json(await assistantTurn({ sessionId, text, bizId, base: baseFor(req) }));
+      res.json(await assistantTurn({ sessionId, text, bizId, base: baseFor(req), visitorId: req.visitorId || null }));
     } catch (err) {
       console.error('assistant', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: friendlyError(err.message) });
     }
   });
 }

@@ -11,6 +11,7 @@ import { localDate } from '../slots.js';
 import { findService, defaultPresetId } from '../business.js';
 import { config } from '../config.js';
 import { makeRateLimiter } from '../client-ip.js';
+import { isInternal } from '../visitor.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 export const HOLD_MINUTES = () => Number(process.env.HOLD_MINUTES || 120);
@@ -149,7 +150,7 @@ function requireBooking(business, id, key) {
 // Tool results carry the same JSON twice: as text (every client) and as structuredContent (newer clients).
 const ok = (data) => ({ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], structuredContent: data });
 
-export function buildServer(business, { base = config.publicUrl } = {}) {
+export function buildServer(business, { base = config.publicUrl, visitorId = null } = {}) {
   const server = new McpServer(
     { name: `${business.id}-booking`, title: business.name, version: '1.0.0', description: `Book ${business.name} (${business.trade}, ${business.city}). A human approves every payment in PayPal.` },
     {
@@ -233,7 +234,7 @@ export function buildServer(business, { base = config.publicUrl } = {}) {
         });
       }
       const lead = store.createLead({ name: customer_name, phone: customer_phone || '', email: customer_email || '', channel: 'AI assistant (MCP)', presetId: business.id });
-      store.updateLead(lead.id, { bookedBy: agent, source: 'agent' });
+      store.updateLead(lead.id, { bookedBy: agent, source: 'agent', ...(visitorId ? { visitorId } : {}) });
       store.addMessage(lead.id, 'customer', `(${agent}, booking for ${customer_name} over MCP) ${q.service}${q.size ? `, ${q.size}` : ''} at ${slot_start}.`, { channel: 'mcp', agent });
       const r = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: q.service_id, size: q.size || 'standard', slotStart: slot_start, customerName: customer_name, customerEmail: customer_email });
       store.updateBooking(r.booking.id, { bookedBy: agent, source: 'agent' });
@@ -376,7 +377,7 @@ export function baseFor(req) {
 const notAllowed = (req, res) => res.status(405).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed. This MCP endpoint is stateless: POST only.' }, id: null });
 
 async function handle(business, req, res) {
-  const server = buildServer(business, { base: baseFor(req) });
+  const server = buildServer(business, { base: baseFor(req), visitorId: req.visitorId || null });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on('close', () => {
     transport.close().catch(() => {});
@@ -392,7 +393,10 @@ async function handle(business, req, res) {
 }
 
 export function mountMcp(app) {
-  const limiter = rateLimit(120, 60 * 1000);
+  // Outside assistants share the public limit; the demo page's own assistant (internal secret, see visitor.js) does
+  // not, so many visitors trying the demo at once never use up one shared bucket.
+  const publicLimit = rateLimit(120, 60 * 1000);
+  const limiter = (req, res, next) => (isInternal(req) ? next() : publicLimit(req, res, next));
   const json = express.json({ limit: '1mb' });
   const forBusiness = (req, res) => {
     // Bare /mcp is the default demo business, never whichever business an owner page last showed.
