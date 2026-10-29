@@ -212,3 +212,16 @@ test('"Test a dispute" is refused on an uncaptured hold and works on captured mo
   assert.equal(r2.status, 200);
   assert.equal(store.getBooking(held.id).disputes[0].amount, B.totals(store.getBooking(held.id)).paid);
 });
+
+// ---------- 10. simulated payouts say so ----------
+test('demo server: the payout is labeled simulated, never "on its way"', async () => {
+  store.resetAll();
+  const biz = B.businessById('cleaning');
+  await B.withBusiness(biz, () => seedSampleDay(biz));
+  const sarah = store.listBookings().find((b) => b.customerName === 'Sarah Kim');
+  await new Promise((r) => setTimeout(r, 50));
+  const nb = store.getBooking(sarah.id);
+  assert.equal(nb.payout.status, 'simulated');
+  assert.match(nb.timeline.find((t) => /payout/i.test(t.text)).text, /Simulated payout .*No money moved/);
+  assert.ok(!store.listActivity().some((a) => a.bookingId === sarah.id && /on its way/.test(a.text)));
+});

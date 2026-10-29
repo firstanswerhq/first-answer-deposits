@@ -256,3 +256,27 @@ test('Reset demo keeps bookings with a sent invoice or an open PayPal order, eve
   assert.ok(store.getBooking(ordered.id), 'open PayPal order: kept');
   assert.ok(!store.getBooking(plain.id), 'nothing open in PayPal: cleared');
 });
+
+// ---------- 10. payouts on a keyed server ----------
+test('keyed server: no payout email means no payout and an honest message; with one, PayPal Payouts is called', async () => {
+  const b = await paidWithMandate('NoEmail', 0, { hold: false });
+  await B.markCompleted(b.id);
+  const bal = store.getBooking(b.id).payments.find((p) => p.kind === 'balance' && p.status === 'pending');
+  await pay(bal.id);
+  const before = calls.filter((c) => c.path === '/v1/payments/payouts').length;
+  const nb = store.getBooking(b.id);
+  assert.equal(nb.status, 'paid_in_full');
+  await new Promise((r) => setTimeout(r, 120));
+  const pb = store.getBooking(b.id);
+  assert.equal(pb.payout.status, 'no_payout_email');
+  assert.ok(!store.listActivity().some((a) => a.bookingId === b.id && /on its way/.test(a.text)), 'never says money is on its way');
+  assert.ok(store.listActivity().some((a) => a.bookingId === b.id && /no PayPal payout email/.test(a.text)));
+  assert.equal(calls.filter((c) => c.path === '/v1/payments/payouts').length, before);
+  // The owner adds a payout email: the next try sends it.
+  store.saveBusiness({ ...biz, id: 'cleaning-copy' });
+  store.updateBooking(b.id, { presetId: 'cleaning-copy' });
+  store.saveBusiness({ id: 'cleaning-copy', payoutEmail: 'owner@example.com' });
+  const sent = await B.payoutForBooking(b.id);
+  assert.equal(sent.payout.email, 'owner@example.com');
+  assert.ok(calls.filter((c) => c.path === '/v1/payments/payouts').length > before);
+});

@@ -1215,9 +1215,11 @@ export async function sendRebookNudges({ force = false, presetId = null } = {}) 
 // Demo money counts only on a server with no PayPal keys (where the payout is recorded, not sent).
 // A deposit still on hold (authorized, not captured) is never paid out.
 const viaPayPal = (p) => (p.hold && p.hold.status !== 'captured' ? false : isDemoMoney(p) ? !paypalReady : p.mode === 'paypal');
+// Without PayPal keys a payout is simulated and labeled so. With keys but no payout email, nothing is sent and the
+// owner is told to add one (the money stays in the platform account); a later call pays it out once one is set.
 export async function payoutForBooking(bookingId) {
   const b = store.getBooking(bookingId);
-  if (!b || b.payout || b.status !== 'paid_in_full') return null;
+  if (!b || (b.payout && b.payout.status !== 'no_payout_email') || b.status !== 'paid_in_full') return null;
   const business = businessOf(b);
   const captured = b.payments.filter((p) => (p.status === 'completed' || p.status === 'refunded') && viaPayPal(p));
   const gross = sum(captured.map((p) => Number(p.amount || 0) + Number(p.tip || 0)));
@@ -1226,13 +1228,24 @@ export async function payoutForBooking(bookingId) {
   const amount = round2(gross - refunds - fees);
   if (amount <= 0) return null;
   const email = business.payoutEmail || null;
-  let result = { batchId: 'DEMO-PAYOUT', status: 'demo' };
-  if (paypalReady && email) {
-    result = await paypal.sendPayout({ bookingId: b.id, amount, email, note: `${b.service} for ${b.customerName}, ${b.slotLabel}` });
+  const at = new Date().toISOString();
+  if (paypalReady && !email) {
+    if (b.payout?.status === 'no_payout_email') return null; // already told the owner
+    store.updateBooking(b.id, { payout: { amount, email: null, batchId: null, status: 'no_payout_email', at } });
+    store.addTimeline(b.id, `No payout sent: ${business.name} has no PayPal payout email yet, so ${usd(amount)} stays in the platform account until one is added.`);
+    store.logActivity(`${usd(amount)} from ${b.customerName}'s job is ready to pay out, but no PayPal payout email is set, so nothing was sent. Add one under Connections.`, { bookingId: b.id, kind: 'payout_waiting' });
+    return store.getBooking(b.id);
   }
-  store.updateBooking(b.id, { payout: { amount, email, batchId: result.batchId, status: result.status, at: new Date().toISOString() } });
-  store.addTimeline(b.id, `Paid out ${usd(amount)} to the business${email ? ` (${email})` : ''}. PayPal payout ${result.batchId}.`);
-  store.logActivity(`${usd(amount)} from ${b.customerName}'s job is on its way to your PayPal${email ? ` (${email})` : ''}.`, { bookingId: b.id, kind: 'payout' });
+  if (!paypalReady) {
+    store.updateBooking(b.id, { payout: { amount, email, batchId: 'SIMULATED', status: 'simulated', simulated: true, at } });
+    store.addTimeline(b.id, `Simulated payout (demo server, no PayPal keys): ${usd(amount)} would go to ${email || "the owner's PayPal"} through PayPal Payouts. No money moved.`);
+    store.logActivity(`Simulated payout (demo, no PayPal call): ${usd(amount)} from ${b.customerName}'s job would go to ${email || 'your PayPal'}.`, { bookingId: b.id, kind: 'payout' });
+    return store.getBooking(b.id);
+  }
+  const result = await paypal.sendPayout({ bookingId: b.id, amount, email, note: `${b.service} for ${b.customerName}, ${b.slotLabel}` });
+  store.updateBooking(b.id, { payout: { amount, email, batchId: result.batchId, status: result.status, at } });
+  store.addTimeline(b.id, `Paid out ${usd(amount)} to the business (${email}). PayPal payout ${result.batchId}.`);
+  store.logActivity(`${usd(amount)} from ${b.customerName}'s job is on its way to your PayPal (${email}).`, { bookingId: b.id, kind: 'payout' });
   return store.getBooking(b.id);
 }
 
@@ -1251,7 +1264,7 @@ export function moneySummary({ days = 7, presetId = null } = {}) {
   const tips = sum(done.map((p) => (p.tip || 0) - (p.refund?.tip || 0)));
   const pending = sum(payments.filter((p) => p.status === 'pending').map((p) => p.amount));
   const kept = sum(all.filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
-  const paidOut = sum(all.filter((b) => b.payout && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
+  const paidOut = sum(all.filter((b) => b.payout && b.payout.status !== 'no_payout_email' && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
   return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, onHold, depositsKeptFromLateCancels: kept, paidOut };
 }
 
