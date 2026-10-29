@@ -179,18 +179,24 @@ const inPart = (slot, when) => {
 const partWords = (when) => (when?.hour !== undefined ? `at ${((when.hour + 11) % 12) + 1}` : when?.part ? `in the ${when.part}` : '');
 const dayWords = (day) => (day && day !== 'any' ? (day === 'weekend' ? 'this weekend' : day[0].toUpperCase() + day.slice(1)) : '');
 
-// "Friday morning" means the nearest Friday. If that morning is full, offer that day's other times
-// and the next morning that is open, instead of quietly jumping a week.
-function chooseSlot(slots, day, when, skip = null) {
+// "Friday morning" means the nearest Friday. When that exact time is open it is the slot. When it is not (on a shared
+// demo server someone may have just taken it), `nearest` is the closest open time: the same day first (closest hour),
+// then the same part of the day on a later day, then the next open time at all. A booking is only a hold the human
+// still approves in PayPal, so the assistant holds the nearest time and says so instead of stalling on a question.
+const WANT_HOUR = { morning: 9, afternoon: 13, evening: 18 };
+export function chooseSlot(slots, day, when, skip = null) {
   const open = slots.filter((x) => x.start !== skip);
-  if (!open.length) return { slot: null, alternatives: [] };
+  if (!open.length) return { slot: null, nearest: null, alternatives: [] };
   const specific = day && !['any', 'weekend'].includes(day);
   const firstDate = open[0].label.split(',').slice(0, 2).join(',');
   const pool = specific ? open.filter((x) => x.label.startsWith(firstDate)) : open;
   const slot = pool.find((x) => inPart(x, when)) || null;
-  if (slot) return { slot, alternatives: [] };
-  const later = open.filter((x) => !pool.includes(x) && inPart(x, when)).slice(0, 1);
-  return { slot: null, alternatives: [...pool.slice(0, 2), ...later].slice(0, 3) };
+  if (slot) return { slot, nearest: slot, alternatives: [] };
+  const target = when?.hour ?? WANT_HOUR[when?.part] ?? 9;
+  const sameDay = [...pool].sort((a, b) => Math.abs(slotHour(a.label) - target) - Math.abs(slotHour(b.label) - target));
+  const later = open.filter((x) => !pool.includes(x) && inPart(x, when));
+  const nearest = sameDay[0] || later[0] || open[0];
+  return { slot: null, nearest, alternatives: [...pool.slice(0, 2), ...later.slice(0, 1)].slice(0, 3) };
 }
 
 function pickOffered(session, text) {
@@ -312,28 +318,40 @@ async function scriptedTurn(s, text, url, trace) {
       return { reply: `${what} is ${usd(q.price)} with a ${usd(q.deposit_due_now)} deposit. What name should I book it under?`, approval: null };
     }
     let slot = f.slot || null;
-    if (!slot) {
+    let swapped = null; // set when the exact time asked for was taken and the nearest open one was held instead
+    const tried = new Set();
+    const findSlot = async () => {
       const av = await mcp.call('check_availability', { day: f.day && f.day !== 'any' ? f.day : undefined, count: 8 });
-      const pick = chooseSlot(av.slots, f.day, f.when);
-      slot = pick.slot;
-      if (!slot) {
-        const alt = pick.alternatives.length ? pick.alternatives : (await mcp.call('check_availability', { count: 6 })).slots.slice(0, 3);
-        if (!alt.length) return { reply: `${biz.name} has nothing open in the next three weeks. Want me to try another business?`, approval: null };
-        s.offered = alt;
-        s.pending = 'slot';
-        return { reply: `${what} is ${usd(q.price)}. Nothing open ${dayWords(f.day) || 'soon'} ${partWords(f.when)}. Closest: ${alt.map((x, i) => `${i + 1}) ${x.label}`).join('  ')}. Which one?`.replace(/\s+/g, ' '), approval: null };
-      }
-    }
+      const pick = chooseSlot(av.slots.filter((x) => !tried.has(x.start)), f.day, f.when);
+      if (pick.slot) return pick.slot;
+      let near = pick.nearest;
+      if (!near) near = (await mcp.call('check_availability', { count: 6 })).slots.find((x) => !tried.has(x.start)) || null;
+      if (near) swapped = near;
+      return near;
+    };
+    if (!slot) slot = await findSlot();
+    if (!slot) return { reply: `${biz.name} has nothing open in the next three weeks. Want me to try another business?`, approval: null };
     s.offered = null;
-    const r = await mcp.call('book_appointment', {
+    const bookArgs = (start) => ({
       service: service.id,
       ...(f.size ? { size: f.size } : {}),
-      slot_start: slot.start,
+      slot_start: start,
       customer_name: f.name,
       ...(f.phone ? { customer_phone: f.phone } : {}),
       ...(f.budget ? { max_total: f.budget } : {}),
       agent_name: agentName(),
     });
+    let r;
+    try {
+      r = await mcp.call('book_appointment', bookArgs(slot.start));
+    } catch (err) {
+      // Someone else took that time between the availability check and the booking: take the next nearest once.
+      if (!/no longer open/i.test(err.message)) throw err;
+      tried.add(slot.start);
+      slot = await findSlot();
+      if (!slot) return { reply: `${biz.name} has nothing open in the next three weeks. Want me to try another business?`, approval: null };
+      r = await mcp.call('book_appointment', bookArgs(slot.start));
+    }
     if (!r.booked) {
       s.pending = 'budget';
       return { reply: r.message, approval: null };
@@ -343,11 +361,14 @@ async function scriptedTurn(s, text, url, trace) {
     s.facts = { name: f.name, phone: f.phone };
     s.booking = { id: r.booking_id, key: r.booking_key, slotStart: r.slot_start, approvalUrl: r.approval_url, amount: r.approval_amount };
     if (!r.human_approval_required) return { reply: `Booked: ${what} with ${biz.name} on ${r.appointment}. No deposit needed, so you're confirmed.`, approval: null };
+    const asked = [dayWords(f.day), partWords(f.when)].filter(Boolean).join(' ');
     const reply = [
+      swapped ? `${asked ? `${asked[0].toUpperCase()}${asked.slice(1)} was taken` : 'That time was taken'}, so I held the closest open time instead.` : '',
       `Done. I held ${what} with ${biz.name} for ${r.appointment}.`,
       `Total ${usd(r.total)}: a ${usd(r.deposit)} deposit now and ${usd(r.total - r.deposit)} after the job.`,
       `I can't pay for you. Approve the ${usd(r.deposit)} in PayPal (card, Venmo or Pay Later work too) and the time is yours. Free to cancel or move until ${r.free_cancel_until}.`,
-    ].join(' ');
+      swapped ? 'Want a different time? Say "move it to" and the day.' : '',
+    ].filter(Boolean).join(' ');
     return { reply, approval: { url: r.approval_url, amount: r.approval_amount, bookingId: r.booking_id } };
   } finally {
     await mcp.close();
@@ -364,7 +385,7 @@ async function modelTurn(s, text, url, trace, model) {
     const result = await generateText({
       model,
       system: `You are the customer's personal AI assistant (your name is ${agentName()}). The customer wants you to book a local service business for them. The business's booking system is available as tools over MCP.
-How to work: call get_business_info first, then get_quote, then check_availability, then book_appointment with the exact slot_start. Pass the customer's budget as max_total if they gave one, and agent_name "${agentName()}". Use their name as customer_name; ask for it if you do not have it. Ask one short question when something is missing.
+How to work: call get_business_info first, then get_quote, then check_availability, then book_appointment with the exact slot_start. Pass the customer's budget as max_total if they gave one, and agent_name "${agentName()}". Use their name as customer_name; ask for it if you do not have it. Ask one short question when something is missing. If the exact time they asked for is taken, book the closest open time within their budget and tell them which time you held (they can move it); do not stall on a question.
 Money: you cannot pay. When book_appointment returns approval_url, tell the customer the total, the deposit due now, that only they can approve it in PayPal (card, Venmo and Pay Later work too, no account needed), and give the link. Never say the appointment is confirmed until get_booking_status says confirmed.
 Style: 1 to 3 short plain sentences, no markdown, no lists.`,
       messages,
