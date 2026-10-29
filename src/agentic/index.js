@@ -7,18 +7,10 @@ import { mountMcp, baseFor, cors } from './mcp.js';
 import { mountDiscovery } from './discovery.js';
 import { assistantTurn, getSession, agentName } from './assistant.js';
 import { getModel } from '../agent/model.js';
+import { makeRateLimiter } from '../client-ip.js';
 
-const hits = new Map();
-function rateLimit(max, windowMs) {
-  return (req, res, next) => {
-    const now = Date.now();
-    const list = (hits.get(req.ip) || []).filter((t) => now - t < windowMs);
-    if (list.length >= max) return res.status(429).json({ error: 'Too many messages, give it a minute.' });
-    list.push(now);
-    hits.set(req.ip, list);
-    next();
-  };
-}
+// Keyed on the visitor, not the host's proxy (see client-ip.js).
+const rateLimit = makeRateLimiter();
 
 export function mountAgentic(app) {
   mountMcp(app);
