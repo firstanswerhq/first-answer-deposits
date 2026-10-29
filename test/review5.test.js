@@ -102,3 +102,48 @@ test('AI owner gate: a model that asks then calls confirmed:true in the same tur
     _setModelForTests(null);
   }
 });
+
+// A booking an AI assistant made, deposit paid with a spending limit (demo money).
+async function agentPaid(name, limit, { slot = 0 } = {}) {
+  const biz = B.businessById('cleaning');
+  const s = B.availableSlots(biz, { limit: slot + 1 })[slot];
+  const lead = store.createLead({ presetId: 'cleaning' });
+  const { booking } = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: 'deep', size: '3 bedrooms', slotStart: s.start, customerName: name });
+  store.updateBooking(booking.id, { source: 'agent', bookedBy: 'Claude' });
+  B.completeDemoPayment(booking.payments[0].id, limit ? { mandate: { limit } } : {});
+  return store.getBooking(booking.id);
+}
+
+// ---------- 6. a partial refund after the job is never billed back ----------
+test('partial refund after the job: the balance link is re-priced, pay_balance settles it, the booking is paid in full', async () => {
+  store.resetAll();
+  const b = await agentPaid('Refy After', 300);
+  await B.markCompleted(b.id);
+  const before = B.totals(store.getBooking(b.id));
+  const link = store.getBooking(b.id).payments.find((p) => p.kind === 'balance' && p.status === 'pending');
+  await B.refund(b.id, { amount: 20 });
+  let nb = store.getBooking(b.id);
+  const t = B.totals(nb);
+  assert.equal(t.due, before.due, 'the refund does not add to what is owed');
+  assert.equal(nb.payments.find((p) => p.id === link.id).amount, t.due, 'the link asks for exactly what is due');
+  const r = await B.payWithMandate(b.id, { agent: 'Claude' });
+  assert.equal(r.paid, true);
+  nb = store.getBooking(b.id);
+  assert.equal(nb.status, 'paid_in_full');
+  assert.equal(B.totals(nb).due, 0);
+  assert.equal((await B.payWithMandate(b.id, {})).reason, 'nothing_due');
+  assert.ok(nb.payout, 'paid out once paid in full');
+});
+
+test('a done job owing money with no open link gets one (remind and pay_balance never dead-end)', async () => {
+  store.resetAll();
+  const b = await agentPaid('Stuck', 300, { slot: 1 });
+  await B.markCompleted(b.id);
+  const link = store.getBooking(b.id).payments.find((p) => p.kind === 'balance' && p.status === 'pending');
+  store.updatePayment(link.id, { status: 'void' }); // the old stuck state
+  const nb = await B.remind(b.id);
+  const fresh = nb.payments.find((p) => p.kind === 'balance' && p.status === 'pending');
+  assert.ok(fresh, 'a fresh final-bill link');
+  assert.equal(fresh.amount, B.totals(nb).due);
+  assert.equal((await B.payWithMandate(b.id, { agent: 'Claude' })).paid, true);
+});

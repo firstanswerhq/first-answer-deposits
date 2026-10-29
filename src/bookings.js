@@ -108,7 +108,9 @@ export function findBookingsByName(name) {
 // ---------------- money math ----------------
 export function totals(booking) {
   const approved = sum(booking.changes.filter((c) => c.status === 'approved').map((c) => c.amount));
-  const total = round2(booking.price + approved);
+  // credit: job money refunded while the booking stayed open. A refund is money back, so it comes off the bill too;
+  // otherwise the customer would be billed for it again on the final balance.
+  const total = round2(booking.price + approved - (booking.credit || 0));
   const done = booking.payments.filter((p) => p.status === 'completed' || p.status === 'refunded');
   const paidGross = sum(done.filter((p) => p.kind !== 'tip').map((p) => p.amount));
   const tipsGross = sum(done.map((p) => p.tip || 0));
@@ -687,8 +689,8 @@ export async function payWithMandate(bookingId, opts = {}) {
   return withBookingLock(bookingId, () => payWithMandateNow(bookingId, opts));
 }
 async function payWithMandateNow(bookingId, { tip = 0, agent = 'the assistant' } = {}) {
-  const b = store.getBooking(bookingId);
-  if (!b) throw new Error('Booking not found.');
+  if (!store.getBooking(bookingId)) throw new Error('Booking not found.');
+  const b = await repriceBalance(bookingId);
   const pending = b.payments.find((p) => p.status === 'pending' && p.kind === 'balance');
   if (b.status !== 'completed' || !pending) {
     return { paid: false, reason: b.status === 'confirmed' || b.status === 'held' ? 'job_not_done' : 'nothing_due', check: null };
@@ -721,8 +723,8 @@ async function payWithMandateNow(bookingId, { tip = 0, agent = 'the assistant' }
 
 // ---------------- reminders ----------------
 export async function remind(bookingId) {
-  const b = store.getBooking(bookingId);
-  if (!b) throw new Error('Booking not found.');
+  if (!store.getBooking(bookingId)) throw new Error('Booking not found.');
+  const b = await repriceBalance(bookingId);
   const pending = b.payments.find((p) => p.status === 'pending');
   if (!pending || !['held', 'completed'].includes(b.status)) throw new Error(`${b.customerName} doesn't owe anything right now (${STATUS_WORDS[b.status] || b.status}), so no reminder was sent.`);
   const text =
@@ -811,7 +813,10 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
   const total = round2(jobBack + tipBack);
   const after = totals(store.getBooking(b.id));
   const fullyRefunded = after.paid <= 0.001;
-  store.updateBooking(b.id, { status: fullyRefunded ? newStatus : b.status, refundedAt: new Date().toISOString(), refundReason: reason });
+  // A partial refund on a booking that stays open lowers the bill by the same amount (see totals: credit).
+  const credit = !fullyRefunded && jobBack > 0 ? round2((store.getBooking(b.id).credit || 0) + jobBack) : store.getBooking(b.id).credit;
+  store.updateBooking(b.id, { status: fullyRefunded ? newStatus : b.status, refundedAt: new Date().toISOString(), refundReason: reason, ...(credit ? { credit } : {}) });
+  if (!fullyRefunded) await repriceBalance(b.id);
   // One line per distinct reference: two demo payments refunded together never print "X, X".
   const ref = [...new Set(refunds.map((r) => r.refundId))].join(', ');
   // What went back, in plain words: "$114 plus the $500 tip ($614 in all)" or "$50 of the $114 paid; the $20 tip was not refunded".
@@ -832,6 +837,37 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
   if (fullyRefunded) endMandate(b.id, 'revoked', 'The booking was refunded.');
   store.logActivity(`Refunded ${what} to ${b.customerName}${reason ? ` (${reason})` : ''}.${tipNote}`, { bookingId: b.id, kind: 'refund' });
   return { booking: store.getBooking(b.id), refunded: total, jobRefunded: jobBack, tipRefunded: tipBack, reference: ref, released: allReleased };
+}
+
+// The open final-bill link always asks for exactly what is still due: re-priced after a refund or a change, turned
+// off when nothing is due (the job is then paid in full), and made again if a done job owes money with no link.
+// So a done booking can never sit with money owed and no way to pay it.
+export async function repriceBalance(bookingId) {
+  let b = store.getBooking(bookingId);
+  if (!b || b.status !== 'completed' && b.status !== 'paid_in_full') return b;
+  const due = totals(b).due;
+  const open = b.payments.filter((p) => p.status === 'pending' && p.kind === 'balance');
+  if (due <= 0.001) {
+    await Promise.all(open.map(voidPayment));
+    if (b.status === 'completed') {
+      store.updateBooking(b.id, { status: 'paid_in_full', paidInFullAt: new Date().toISOString() });
+      endMandate(b.id, 'used', 'The booking is paid in full.');
+      store.addTimeline(b.id, 'Nothing is due after the refund, so the booking is paid in full.');
+      payoutForBooking(b.id).catch((e) => console.error('payout', e.message));
+    }
+    return store.getBooking(b.id);
+  }
+  if (open.length === 1) {
+    if (Math.abs(open[0].amount - due) > 0.001) {
+      store.updatePayment(open[0].id, { amount: due, orderId: null, paypalLink: null });
+      store.addTimeline(b.id, `Final-bill link re-priced to ${usd(due)}.`);
+    }
+  } else if (open.length === 0) {
+    if (b.status === 'paid_in_full') store.updateBooking(b.id, { status: 'completed' });
+    const p = await newPayment(store.getBooking(b.id), { kind: 'balance', amount: due, label: 'Balance' });
+    store.addTimeline(b.id, `Sent a fresh ${usd(due)} final-bill link (${p.id}).`);
+  }
+  return store.getBooking(b.id);
 }
 
 function allReleasedLine(refunds, what, reason, tipNote, ref) {
