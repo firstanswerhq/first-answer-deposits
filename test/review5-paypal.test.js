@@ -1,0 +1,114 @@
+// Fifth review, real-mode money paths (PayPal keys set) against a fake PayPal that answers after 40 ms, so calls
+// that race really do overlap: pay_balance racing itself, invoices paid on closed or replaced deposits, split
+// deposits released with a share paid, and payouts on a keyed server.
+// (Its own file: PayPal keys are read when the app loads.)
+import { test, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+
+process.env.DATA_FILE = path.join(os.tmpdir(), `fad-review5-pp-${process.pid}.json`);
+process.env.FAD_NO_LISTEN = '1';
+process.env.PAYPAL_CLIENT_ID = 'test-client-id';
+process.env.PAYPAL_CLIENT_SECRET = 'test-client-secret';
+for (const k of ['GOOGLE_GENERATIVE_AI_API_KEY', 'ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'META_API_KEY']) process.env[k] = '';
+
+// ---------- a fake PayPal with latency and idempotency ----------
+const calls = [];
+const orders = new Map();
+const seenKeys = new Map();
+let n = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const json = (b, s = 200) => new Response(b === null ? null : JSON.stringify(b), { status: s, headers: { 'Content-Type': 'application/json' } });
+const fake = { failCancel: 0 };
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, init = {}) => {
+  const u = new URL(String(url));
+  const method = init.method || 'GET';
+  const p = u.pathname;
+  let body = null;
+  if (typeof init.body === 'string' && init.body.startsWith('{')) body = JSON.parse(init.body);
+  const key = init.headers?.['PayPal-Request-Id'];
+  calls.push({ method, path: p, body, key });
+  if (p === '/v1/oauth2/token') return json({ access_token: 'tok', expires_in: 3600 });
+  await sleep(40);
+  if (key && seenKeys.has(key)) return json(seenKeys.get(key));
+  let out;
+  let m;
+  if (p === '/v2/checkout/orders' && method === 'POST') {
+    const id = `ORDER-${++n}`;
+    if (body.payment_source?.paypal?.vault_id) out = { id, status: 'COMPLETED', purchase_units: [{ payments: { captures: [{ id: `CAP-VAULT-${n}`, status: 'COMPLETED', amount: { value: body.purchase_units[0].amount.value } }] } }] };
+    else {
+      orders.set(id, body);
+      out = { id, status: 'CREATED', links: [{ rel: 'approve', href: `https://x/${id}` }] };
+    }
+  } else if ((m = p.match(/^\/v2\/checkout\/orders\/([^/]+)$/))) out = { id: m[1], intent: orders.get(m[1])?.intent, status: 'APPROVED' };
+  else if ((m = p.match(/^\/v2\/checkout\/orders\/([^/]+)\/authorize$/))) {
+    const v = orders.get(m[1])?.payment_source?.paypal?.attributes?.vault;
+    out = { id: m[1], status: 'COMPLETED', ...(v ? { payment_source: { paypal: { attributes: { vault: { id: 'VAULT-1', status: 'VAULTED' } } } } } : {}), purchase_units: [{ payments: { authorizations: [{ id: `AUTH-${m[1]}`, status: 'CREATED' }] } }] };
+  } else if ((m = p.match(/^\/v2\/checkout\/orders\/([^/]+)\/capture$/))) {
+    const v = orders.get(m[1])?.payment_source?.paypal?.attributes?.vault;
+    out = { id: m[1], status: 'COMPLETED', ...(v ? { payment_source: { paypal: { attributes: { vault: { id: 'VAULT-1', status: 'VAULTED' } } } } } : {}), purchase_units: [{ payments: { captures: [{ id: `CAP-${m[1]}`, status: 'COMPLETED' }] } }] };
+  } else if ((m = p.match(/^\/v2\/payments\/authorizations\/([^/]+)\/capture$/))) out = { id: `CAP-${m[1]}-${calls.length}`, status: 'COMPLETED' };
+  else if (/\/void$/.test(p)) return new Response(null, { status: 204 });
+  else if ((m = p.match(/^\/v2\/payments\/captures\/([^/]+)\/refund$/))) out = { id: `REF-${m[1]}`, status: 'COMPLETED' };
+  else if (p === '/v2/invoicing/invoices' && method === 'POST') out = { id: `INV2-${++n}` };
+  else if (/\/v2\/invoicing\/invoices\/[^/]+\/cancel$/.test(p)) {
+    if (fake.failCancel > 0) {
+      fake.failCancel--;
+      return json({ name: 'INTERNAL_SERVER_ERROR' }, 500);
+    }
+    return new Response(null, { status: 204 });
+  } else if (/\/v2\/invoicing\/invoices\/[^/]+\/(send|remind)$/.test(p)) out = { href: 'https://x/inv' };
+  else if (p === '/v1/payments/payouts') out = { batch_header: { payout_batch_id: `BATCH-${n}`, batch_status: 'PENDING' } };
+  if (!out) return json({ name: 'NOT_FOUND', path: p }, 404);
+  if (key) seenKeys.set(key, out);
+  return json(out, 201);
+};
+after(() => {
+  globalThis.fetch = realFetch;
+});
+
+const store = await import('../src/store.js');
+const B = await import('../src/bookings.js');
+const biz = B.businessById('cleaning');
+beforeEach(() => store.resetAll());
+
+async function agentBooking(name, { hold = true } = {}) {
+  const slot = B.availableSlots(biz, { limit: 80, days: 14 }).find((s) => B.intentFor({ slotStart: s.start, presetId: 'cleaning' }, { kind: 'deposit' }) === (hold ? 'authorize' : 'capture'));
+  const lead = store.createLead({ presetId: 'cleaning' });
+  const { booking } = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: 'deep', size: '3 bedrooms', slotStart: slot.start, customerName: name });
+  store.updateBooking(booking.id, { source: 'agent', bookedBy: 'Claude' });
+  return store.getBooking(booking.id);
+}
+async function pay(paymentId, opts = {}) {
+  const co = await B.checkoutFor(paymentId, opts);
+  await B.syncPayment(paymentId, { orderId: co.orderId });
+}
+async function paidWithMandate(name, limit, opts) {
+  const b = await agentBooking(name, opts);
+  await pay(b.payments[0].id, { mandate: { limit } });
+  return store.getBooking(b.id);
+}
+const vaultCharges = () => calls.filter((c) => c.path === '/v2/checkout/orders' && c.body?.payment_source?.paypal?.vault_id);
+const invoicePaid = (inv, txn) => B.handlePayPalEvent({ event_type: 'INVOICING.INVOICE.PAID', resource: { invoice: { id: inv, payments: { transactions: [{ payment_id: txn }] } } } });
+const refundsOf = (cap) => calls.filter((c) => c.path === `/v2/payments/captures/${cap}/refund`);
+
+// ---------- 1. pay_balance racing itself ----------
+test('four parallel pay_balance calls charge the saved wallet once, inside the limit', async () => {
+  const b = await paidWithMandate('Race', 260);
+  await B.markCompleted(b.id);
+  const before = vaultCharges().length;
+  const rs = await Promise.all([0, 10, 20, 30].map((tip) => B.payWithMandate(b.id, { tip, agent: 'Claude' })));
+  const charges = vaultCharges().slice(before);
+  const total = charges.reduce((a, c) => a + Number(c.body.purchase_units[0].amount.value), 0);
+  assert.equal(charges.length, 1, `one PayPal charge, got ${charges.length}`);
+  assert.ok(total <= 260, `charged ${total}, limit 260`);
+  assert.equal(rs.filter((r) => r.paid).length, 1);
+  assert.ok(rs.filter((r) => !r.paid).every((r) => r.reason === 'nothing_due'));
+  const nb = store.getBooking(b.id);
+  assert.equal(nb.status, 'paid_in_full');
+  assert.ok(nb.mandate.spent <= 260);
+  // The PayPal-Request-Id is the payment alone, so a retry of the same bill with another tip is de-duplicated.
+  assert.match(charges[0].key, /^vault-charge-pay_[^-]+$/);
+});

@@ -223,10 +223,11 @@ export async function voidAuthorization(authorizationId) {
 // A CAPTURE order with payment_source.paypal.vault_id. PayPal may complete it on creation; if it comes back
 // approved instead, it is captured right away.
 export async function chargeVault(opts) {
-  const { body, total } = orderBody({ ...opts, intent: 'CAPTURE', vaultId: opts.vaultId, redirect: false });
+  const { body } = orderBody({ ...opts, intent: 'CAPTURE', vaultId: opts.vaultId, redirect: false });
   const data = await api('/v2/checkout/orders', {
     method: 'POST',
-    idempotencyKey: `vault-charge-${opts.paymentId}-${total.toFixed(2)}`,
+    // Keyed on the payment only: a retry of the same final bill (whatever tip it carries) is de-duplicated by PayPal.
+    idempotencyKey: `vault-charge-${opts.paymentId}`,
     body,
   });
   if (data.status === 'COMPLETED') return { orderId: data.id, ...captureFrom(data) };

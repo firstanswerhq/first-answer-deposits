@@ -37,6 +37,21 @@ export const STATUS_WORDS = {
   no_show: 'No-show (deposit kept per policy)',
 };
 
+// ---------------- one money move at a time per booking ----------------
+// Two calls that move money on the same booking (two pay_balance calls racing, the customer paying the link while
+// the assistant pays from the saved wallet) run one after the other, never interleaved across an await.
+const bookingLocks = new Map();
+export function withBookingLock(bookingId, fn) {
+  const prev = bookingLocks.get(bookingId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  bookingLocks.set(bookingId, tail);
+  tail.then(() => {
+    if (bookingLocks.get(bookingId) === tail) bookingLocks.delete(bookingId);
+  });
+  return run;
+}
+
 // ---------------- lookups ----------------
 // A business is either a built-in demo preset or one an owner set up (stored in the data file).
 export function businessById(id) {
@@ -495,7 +510,12 @@ export function completePayment(paymentId, { captureId = null, fee = null, net =
 
 // orderId: the order the buyer just approved (from the PayPal buttons). It must be one this payment made;
 // without it, the payment's latest order is checked.
-export async function syncPayment(paymentId, { orderId = null } = {}) {
+export async function syncPayment(paymentId, opts = {}) {
+  const found = store.findPayment(paymentId);
+  if (!found) return null;
+  return withBookingLock(found.booking.id, () => syncPaymentNow(paymentId, opts));
+}
+async function syncPaymentNow(paymentId, { orderId = null } = {}) {
   const found = store.findPayment(paymentId);
   if (!found) return null;
   const { payment } = found;
@@ -605,7 +625,11 @@ export function mandateCheck(booking, amount) {
 }
 
 // The assistant pays the final balance (plus an optional tip) from the saved wallet, only inside the limit.
-export async function payWithMandate(bookingId, { tip = 0, agent = 'the assistant' } = {}) {
+// Serialized per booking: the check and the charge happen together, so racing calls can never spend past the limit.
+export async function payWithMandate(bookingId, opts = {}) {
+  return withBookingLock(bookingId, () => payWithMandateNow(bookingId, opts));
+}
+async function payWithMandateNow(bookingId, { tip = 0, agent = 'the assistant' } = {}) {
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
   const pending = b.payments.find((p) => p.status === 'pending' && p.kind === 'balance');
