@@ -191,3 +191,58 @@ test('"Email me an invoice" asks for an email, records the deposit invoice (demo
   assert.equal(store.getBooking(b.id).payments[0].invoice.status, 'canceled', 'paid by link: the invoice is turned off');
   assert.equal(store.getBooking(b.id).status, 'confirmed');
 });
+
+// ---------- 9. sample day, reset, owed now, setup copy ----------
+test('"Load a sample day" twice never duplicates, and "Reset demo" clears only this business', async () => {
+  store.resetAll();
+  const first = await call('POST', '/api/owner/seed', { biz: 'cleaning' });
+  assert.equal(first.status, 200);
+  assert.equal(first.data.bookings, 3);
+  const before = await call('GET', '/api/owner/state', { biz: 'cleaning' });
+  const second = await call('POST', '/api/owner/seed', { biz: 'cleaning' });
+  assert.equal(second.data.already, true);
+  const after = await call('GET', '/api/owner/state', { biz: 'cleaning' });
+  assert.equal(after.data.bookings.length, before.data.bookings.length, 'no duplicate customers');
+  assert.equal(after.data.summary.money.gross, before.data.summary.money.gross, 'the week summary does not jump');
+  assert.equal(after.data.waitlist.length, 1);
+
+  // A held booking owes its deposit now, not the full total.
+  const held = after.data.bookings.find((b) => b.status === 'held');
+  assert.equal(held.owedNow, held.deposit);
+  assert.ok(held.totals.due > held.owedNow);
+
+  // Another business's data and its owner chat survive a reset of this one.
+  await call('POST', '/api/owner/seed', { biz: 'hvac' });
+  await call('POST', '/api/owner/text', { biz: 'hvac', body: { text: 'who owes me?' } });
+  const extra = await assistant({ sessionId: 'reset-visitor', bizId: 'cleaning', text: HEADLINE });
+  assert.ok(extra.approval);
+  const hvacBefore = (await call('GET', '/api/owner/state', { biz: 'hvac' })).data;
+  const reset = await call('POST', '/api/owner/reset-business', { biz: 'cleaning' });
+  assert.equal(reset.status, 200);
+  assert.equal(reset.data.bookings, 3, 'a fresh sample day is loaded');
+  const clean = (await call('GET', '/api/owner/state', { biz: 'cleaning' })).data;
+  assert.equal(clean.bookings.length, 3);
+  assert.ok(!store.getBooking(extra.approval.bookingId), 'demo bookings on this business are cleared');
+  const hvacAfter = (await call('GET', '/api/owner/state', { biz: 'hvac' })).data;
+  assert.equal(hvacAfter.bookings.length, hvacBefore.bookings.length);
+  assert.equal(hvacAfter.ownerThread.length, hvacBefore.ownerThread.length);
+  assert.ok(hvacAfter.ownerThread.length >= 2);
+  // Wiping every business stays off unless the host allows it.
+  assert.equal((await call('POST', '/api/owner/reset', { biz: 'cleaning' })).status, 403);
+});
+
+test('setup copy counts the real questions', async () => {
+  const r = await call('GET', '/api/setup/steps');
+  const words = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+  assert.match(r.data.intro, new RegExp(`${words[r.data.steps.length]} quick questions`));
+  assert.equal(r.data.steps.length, 8);
+});
+
+test('the owner thread on one business never shows another business\'s chat', async () => {
+  store.resetAll();
+  await call('POST', '/api/owner/text', { biz: 'hvac', body: { text: 'who owes me?' } });
+  const cleaning = (await call('GET', '/api/owner/state', { biz: 'cleaning' })).data;
+  assert.equal(cleaning.ownerThread.length, 0);
+  const hvac = (await call('GET', '/api/owner/state', { biz: 'hvac' })).data;
+  assert.equal(hvac.ownerThread.length, 2);
+});

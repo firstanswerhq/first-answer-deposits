@@ -19,6 +19,13 @@ export const STEPS = [
   { id: 'payout', ask: 'Last one: which PayPal email should your money go to when a job is paid?' },
 ];
 
+// The greeting counts the real questions, so the copy can never drift from STEPS.
+const COUNT_WORDS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+export function introLine() {
+  const n = STEPS.length;
+  return `Hi! I'm the First Answer setup assistant. ${COUNT_WORDS[n] || n} quick questions and you're taking bookings with PayPal deposits.`;
+}
+
 const COLOR_NAMES = { red: '#d7263d', orange: '#f26b1d', yellow: '#e0a800', gold: '#c9a227', green: '#1f9d55', teal: '#0e9f8f', blue: '#1d7bf2', navy: '#1b2a6b', purple: '#7c3aed', pink: '#e5489d', black: '#1a1a1a', gray: '#5b6270', grey: '#5b6270', brown: '#7b4b2a' };
 
 // "logo: https://x/logo.png, color #2a9d8f" or "blue" or "skip" -> { color, logoUrl } (either may be empty).

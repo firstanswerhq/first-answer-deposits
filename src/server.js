@@ -11,7 +11,7 @@ import { ownerCommand } from './agent/owner.js';
 import { modelLabel, checkModel, aiStatus } from './agent/model.js';
 import * as setup from './setup.js';
 import * as connect from './connect.js';
-import { seedSampleDay } from './seed.js';
+import { seedSampleDay, resetBusinessDemo } from './seed.js';
 import { mountAgentic } from './agentic/index.js';
 import { checkPublicUrl } from './safe-fetch.js';
 import { newOwnerKey, hashKey, ownerKeyOk, credsFrom, resetAllowed, maskSecret } from './owner-auth.js';
@@ -108,6 +108,8 @@ function publicBooking(b) {
     statusWords: B.STATUS_WORDS[b.status] || b.status,
     deposit: b.deposit,
     totals: B.totals(b),
+    // What is owed right now: the deposit while a booking is held, the balance after that.
+    owedNow: B.owedNow(b),
     freeCancelUntil: B.freeCancelLabel(b),
     changes: b.changes,
     payments: b.payments.map((p) => ({ id: p.id, label: p.label, kind: p.kind, amount: p.amount, tip: p.tip || 0, status: p.status, via: p.via || p.mode || null, refund: p.refund || null, at: p.completedAt || p.createdAt })),
@@ -230,7 +232,7 @@ app.get('/api/booking/:bookingId', (req, res) => {
 });
 
 // ---------- setup by text (any business, in a minute) ----------
-app.get('/api/setup/steps', (req, res) => res.json({ steps: setup.STEPS, ai: Boolean(modelLabel() && aiReady) }));
+app.get('/api/setup/steps', (req, res) => res.json({ steps: setup.STEPS, intro: setup.introLine(), ai: Boolean(modelLabel() && aiReady) }));
 app.post('/api/setup/answer', rateLimit(60, 10 * 60 * 1000), (req, res) => {
   // Keep line breaks here: services come one per line.
   const text = String(req.body.text || '').replace(/[ \t]+/g, ' ').trim().slice(0, 4000);
@@ -375,6 +377,9 @@ app.post('/api/owner/preset', ownerOnly, (req, res) => {
   res.json({ ok: true, business: { id: target.id, name: target.name } });
 });
 app.post('/api/owner/seed', ownerOnly, ownerOfCurrent, wrap(async (req, res) => res.json({ ok: true, ...(await seedSampleDay(B.currentBusiness())) })));
+// Clears only this business's demo data (and reloads its sample day). Demo businesses are open to try; a set-up
+// business only to its owner. Wiping every business at once stays behind resetAllowed() below.
+app.post('/api/owner/reset-business', ownerOnly, ownerOfCurrent, rateLimit(20, 10 * 60 * 1000), wrap(async (req, res) => res.json({ ok: true, ...(await resetBusinessDemo(B.currentBusiness())) })));
 app.post('/api/owner/reset', ownerOnly, (req, res) => {
   // Anyone can open the hosted demo, so wiping everyone's demo data is off unless the host turns it on.
   if (!resetAllowed()) return res.status(403).json({ error: 'Starting over is turned off on this server. (The host can set ALLOW_RESET=1.)' });

@@ -98,6 +98,13 @@ export function totals(booking) {
   return { total, paid, due, tips: round2(tipsGross - tipsRefunded), tipsRefunded, refunded, depositPaid: round2(depositPaid) };
 }
 
+// What the customer owes right now: only the deposit while the booking is held, then the balance.
+export function owedNow(booking) {
+  const t = totals(booking);
+  if (booking.status === 'held') return Math.max(0, round2(booking.deposit - t.depositPaid));
+  return t.due;
+}
+
 // Free to cancel until 24 hours before the job. Last-minute bookings still get an hour to change their mind,
 // so nobody is ever shown a free-cancel deadline that has already passed.
 export function freeCancelDeadline(slotStart, fromMs = Date.now()) {

@@ -86,7 +86,7 @@ function bookings(list) {
         return `<tr><td><strong>${escapeHtml(b.customerName)}</strong><div class="small muted">${escapeHtml(b.title || b.service)}</div></td>
           <td>${escapeHtml(b.appointment)}</td>
           <td><span class="status ${b.status}">${escapeHtml(b.statusWords)}</span></td>
-          <td class="num">${money(b.totals.total)}</td><td class="num">${money(b.totals.paid)}${b.totals.tips ? `<div class="small muted">+${money(b.totals.tips)} tip</div>` : ''}${b.totals.refunded || b.totals.tipsRefunded ? `<div class="small muted">${money(b.totals.refunded + b.totals.tipsRefunded)} refunded</div>` : ''}</td><td class="num">${CLOSED.includes(b.status) ? '<span class="muted" title="Closed: nothing owed">—</span>' : money(b.totals.due)}</td>
+          <td class="num">${money(b.totals.total)}</td><td class="num">${money(b.totals.paid)}${b.totals.tips ? `<div class="small muted">+${money(b.totals.tips)} tip</div>` : ''}${b.totals.refunded || b.totals.tipsRefunded ? `<div class="small muted">${money(b.totals.refunded + b.totals.tipsRefunded)} refunded</div>` : ''}</td><td class="num">${CLOSED.includes(b.status) ? '<span class="muted" title="Closed: nothing owed">—</span>' : b.status === 'held' ? `${money(b.owedNow)}<div class="small muted">deposit now</div>` : money(b.totals.due)}${b.hold ? `<div class="small muted">${escapeHtml(b.hold)}</div>` : ''}</td>
           <td><div class="actions">${acts}<a class="btn ghost small" href="/evidence/${encodeURIComponent(b.id)}${code ? `?code=${encodeURIComponent(code)}` : ''}" target="_blank" title="Everything about this booking in one file">Record</a></div></td></tr>`;
       })
       .join('');
@@ -311,8 +311,8 @@ $('#biz').addEventListener('change', async (e) => {
 $('#seed').addEventListener('click', async () => {
   $('#seed').disabled = true;
   try {
-    await api('/api/owner/seed', { method: 'POST', headers: hdr() });
-    toast('Sample day loaded.');
+    const r = await api('/api/owner/seed', { method: 'POST', headers: hdr() });
+    toast(r.already ? 'The sample day is already loaded. Use Reset demo for a fresh one.' : 'Sample day loaded.');
   } catch (err) {
     toast(err.message, 'bad');
   } finally {
@@ -320,8 +320,23 @@ $('#seed').addEventListener('click', async () => {
     refresh();
   }
 });
+$('#reset-biz').addEventListener('click', async () => {
+  const name = lastState?.business.name || 'this business';
+  if (!(await ask({ title: `Reset ${name}?`, text: `Clears ${name}'s demo bookings, texts and activity, then loads a fresh sample day. Other businesses are not touched, and any booking holding real PayPal sandbox money is kept.`, ok: 'Reset it', danger: true }))) return;
+  $('#reset-biz').disabled = true;
+  try {
+    const r = await api('/api/owner/reset-business', { method: 'POST', headers: hdr() });
+    seenOwner = 0;
+    toast(`Reset. Fresh sample day loaded${r.kept ? ` (${r.kept} booking${r.kept === 1 ? '' : 's'} with real PayPal money kept)` : ''}.`);
+  } catch (err) {
+    toast(err.message, 'bad');
+  } finally {
+    $('#reset-biz').disabled = false;
+    refresh();
+  }
+});
 $('#reset').addEventListener('click', async () => {
-  if (!(await ask({ title: 'Start the demo over?', text: 'This clears every demo booking, message and payment.', ok: 'Clear it', danger: true }))) return;
+  if (!(await ask({ title: 'Wipe all demo data?', text: 'This clears every demo booking, message and payment for every business on this server.', ok: 'Wipe it', danger: true }))) return;
   try {
     await api('/api/owner/reset', { method: 'POST', headers: hdr() });
   } catch (err) {

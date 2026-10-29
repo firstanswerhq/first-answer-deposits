@@ -266,6 +266,24 @@ export function listActivity() {
   return db.activity;
 }
 
+// ---------- one business's demo data ----------
+// Clears everything tied to one business (bookings, leads, waitlist, activity, owner chat), except bookings
+// the keep() test says to leave alone (real PayPal money). Other businesses are never touched.
+export function clearBusinessData(presetId, keep = () => false) {
+  const kept = new Set(db.bookings.filter((b) => b.presetId === presetId && keep(b)).map((b) => b.id));
+  const keptLeads = new Set(db.bookings.filter((b) => kept.has(b.id)).map((b) => b.leadId));
+  const gone = new Set(db.bookings.filter((b) => b.presetId === presetId && !kept.has(b.id)).map((b) => b.id));
+  const goneLeads = new Set(db.leads.filter((l) => l.presetId === presetId && !keptLeads.has(l.id)).map((l) => l.id));
+  db.bookings = db.bookings.filter((b) => !gone.has(b.id));
+  db.leads = db.leads.filter((l) => !goneLeads.has(l.id));
+  db.waitlist = db.waitlist.filter((w) => w.presetId !== presetId || keptLeads.has(w.leadId));
+  db.activity = db.activity.filter((a) => !(a.presetId === presetId || gone.has(a.bookingId) || goneLeads.has(a.leadId)));
+  db.ownerThread = db.ownerThread.filter((m) => m.presetId !== presetId);
+  if (db.ownerPending) delete db.ownerPending[presetId];
+  changed('reset', { presetId });
+  return { bookings: gone.size, kept: kept.size };
+}
+
 // ---------- demo reset ----------
 export function resetAll() {
   const { presetId } = db.settings;

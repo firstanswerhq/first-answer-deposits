@@ -148,8 +148,8 @@ $('#quick-go').addEventListener('click', async () => {
   }
 });
 
-const { steps, ai } = await api('/api/setup/steps');
+const { steps, intro, ai } = await api('/api/setup/steps');
 state.steps = steps;
 if (ai) $('#quick').classList.remove('hidden');
-bubble('them', "Hi! I'm the First Answer setup assistant. Seven quick questions and you're taking bookings with PayPal deposits.");
+bubble('them', intro);
 askNext();
