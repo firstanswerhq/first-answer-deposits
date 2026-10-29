@@ -97,6 +97,9 @@ const MAX_BODY = 2 * 1024 * 1024;
 export function pinnedFetch(url, { method = 'GET', headers = {}, body, signal } = {}, { address, family }) {
   return new Promise((resolve, reject) => {
     const lookup = (host, o, cb) => (o && o.all ? cb(null, [{ address, family }]) : cb(null, address, family));
+    // A body is sent with its length up front, not chunked: some webhook receivers refuse chunked POSTs.
+    const hasBody = body !== undefined && body !== null;
+    if (hasBody && !Object.keys(headers).some((h) => h.toLowerCase() === 'content-length')) headers = { ...headers, 'Content-Length': Buffer.byteLength(body) };
     const req = https.request(url, { method, headers, signal, lookup }, (res) => {
       const chunks = [];
       let size = 0;
@@ -118,7 +121,7 @@ export function pinnedFetch(url, { method = 'GET', headers = {}, body, signal } 
       });
     });
     req.on('error', reject);
-    if (body !== undefined && body !== null) req.write(body);
+    if (hasBody) req.write(body);
     req.end();
   });
 }
