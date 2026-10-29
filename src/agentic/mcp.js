@@ -8,7 +8,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import * as store from '../store.js';
 import * as B from '../bookings.js';
 import { localDate } from '../slots.js';
-import { findService } from '../business.js';
+import { findService, defaultPresetId } from '../business.js';
 import { config } from '../config.js';
 import { makeRateLimiter } from '../client-ip.js';
 
@@ -362,7 +362,8 @@ export function mountMcp(app) {
   const limiter = rateLimit(120, 60 * 1000);
   const json = express.json({ limit: '1mb' });
   const forBusiness = (req, res) => {
-    const business = req.params.bizId ? B.businessById(req.params.bizId) : B.currentBusiness();
+    // Bare /mcp is the default demo business, never whichever business an owner page last showed.
+    const business = B.businessById(req.params.bizId || defaultPresetId);
     if (!business) return res.status(404).json({ jsonrpc: '2.0', error: { code: -32001, message: `No business with id "${req.params.bizId}".` }, id: null });
     return handle(business, req, res);
   };

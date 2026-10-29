@@ -35,9 +35,10 @@ before(async () => {
 });
 after(() => server.close());
 
-async function call(method, url, { body, key, headers: extra = {} } = {}) {
+async function call(method, url, { body, key, biz, headers: extra = {} } = {}) {
   const headers = { 'Content-Type': 'application/json', ...extra };
   if (key) headers['x-owner-key'] = key;
+  if (biz) headers['x-biz'] = biz;
   const res = await fetch(base + url, { method, headers, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
@@ -102,9 +103,10 @@ test('after someone opens their set-up business, the next visitor still lands on
   store.resetAll();
   store.setPreset('cleaning');
   const { business, ownerKey } = await setUpBusiness();
-  // The owner opens their owner link: the saved setting now points at their business.
+  // The owner opens their owner link: their page names their business; no shared setting changes.
   assert.equal((await call('POST', '/api/owner/preset', { body: { presetId: business.id }, key: ownerKey })).status, 200);
-  assert.equal(store.getSettings().presetId, business.id);
+  assert.equal(store.getSettings().presetId, 'cleaning', 'opening a business never changes a shared setting');
+  assert.equal((await call('GET', '/api/owner/state', { key: ownerKey, biz: business.id })).data.business.id, business.id);
 
   // /text with no ?biz= opens the demo business, not the stranger's.
   const start = await call('POST', '/api/text/start', { body: {} });
@@ -120,9 +122,10 @@ test('after someone opens their set-up business, the next visitor still lands on
   assert.equal(seed.status, 200);
   assert.ok(store.listBookings().every((b) => b.presetId !== business.id), 'sample day went to the demo business');
 
+  // A stranger naming that business without the key gets the demo business.
+  assert.equal((await call('GET', '/api/owner/state', { biz: business.id })).data.business.id, 'cleaning');
   // The owner, with the key, still sees their own business.
-  assert.equal((await call('GET', '/api/owner/state', { key: ownerKey })).data.business.id, business.id);
-  assert.equal(store.getSettings().presetId, business.id, 'a stranger visiting does not change the saved setting');
+  assert.equal((await call('GET', '/api/owner/state', { key: ownerKey, biz: business.id })).data.business.id, business.id);
 });
 
 // ---------- 3. rate limits key on the real visitor ----------
@@ -218,8 +221,7 @@ test('owner state: reset flag, summary scoped to the business; rebook scoped; no
   const st = await call('GET', '/api/owner/state');
   assert.equal(st.data.summary.confirmed, 2, 'counts only the demo business it shows');
   assert.equal(st.data.summary.leads, 2);
-  await call('POST', '/api/owner/preset', { body: { presetId: business.id }, key: ownerKey });
-  const own = await call('GET', '/api/owner/state', { key: ownerKey });
+  const own = await call('GET', '/api/owner/state', { key: ownerKey, biz: business.id });
   assert.equal(own.data.summary.confirmed, 1);
 
   // A paid-in-full job at the set-up business is not nudged from the demo owner page.
@@ -229,7 +231,7 @@ test('owner state: reset flag, summary scoped to the business; rebook scoped; no
   const rb = await call('POST', '/api/owner/rebook');
   assert.equal(rb.status, 200);
   assert.ok(!store.getBooking(mine.id).rebookNudgedAt, 'not another business');
-  const rb2 = await call('POST', '/api/owner/rebook', { key: ownerKey });
+  const rb2 = await call('POST', '/api/owner/rebook', { key: ownerKey, biz: business.id });
   assert.deepEqual(rb2.data.result.nudged, ['Kim']);
 
   // Owner actions never send the booking's manage key back.
@@ -243,10 +245,10 @@ test('owner state: reset flag, summary scoped to the business; rebook scoped; no
 
   // The logo link from the owner page gets the same check as setup.
   for (const bad of ['javascript:alert(1)', 'https://x.example/a.png" onerror="alert(1)', 'https://x.example/<b>.png', 'data:image/png;base64,AAA']) {
-    assert.equal((await call('POST', '/api/owner/connections', { key: ownerKey, body: { logoUrl: bad } })).status, 200);
+    assert.equal((await call('POST', '/api/owner/connections', { key: ownerKey, biz: business.id, body: { logoUrl: bad } })).status, 200);
     assert.equal(store.getBusiness(business.id).brand.logoUrl, '', bad);
   }
-  await call('POST', '/api/owner/connections', { key: ownerKey, body: { logoUrl: 'https://x.example/logo.png' } });
+  await call('POST', '/api/owner/connections', { key: ownerKey, biz: business.id, body: { logoUrl: 'https://x.example/logo.png' } });
   assert.equal(store.getBusiness(business.id).brand.logoUrl, 'https://x.example/logo.png');
 });
 

@@ -5,13 +5,14 @@
 // These follow the shape of those specs so agents can read them. They are not certified implementations,
 // and UCP has no services or appointments capability yet, so the booking capability here is this app's own.
 import * as B from '../bookings.js';
+import { defaultPresetId } from '../business.js';
 import { businessInfo, depositRule, mcpUrl, HOLD_MINUTES, PAYMENT_METHODS } from './mcp.js';
 
 const VERSION = '2026-10-25';
 
 function pickBusiness(req) {
   const id = String(req.query.biz || '');
-  return (id && B.businessById(id)) || B.currentBusiness();
+  return (id && B.businessById(id)) || B.businessById(defaultPresetId);
 }
 
 export function ucpProfile(business, base) {

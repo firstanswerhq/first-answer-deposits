@@ -178,6 +178,20 @@ export function findPaymentByOrder(orderId) {
 export function clampTip(v) {
   return Math.max(0, Math.min(500, Math.round(Number(v || 0) * 100) / 100)) || 0;
 }
+// A tip goes on the final bill only. A deposit link never takes one, whatever the page sends.
+export function tipFor(payment, v) {
+  return payment?.kind === 'balance' ? clampTip(v) : 0;
+}
+
+// Why a payment link can't take money right now, in plain words, or null when it can.
+// A canceled or refunded booking is closed: its links are dead even if one is somehow still marked pending.
+const CLOSED = ['canceled', 'refunded', 'no_show'];
+export function notPayable(booking, payment) {
+  if (CLOSED.includes(booking?.status)) return `This booking was ${(STATUS_WORDS[booking.status] || booking.status).toLowerCase()}, so there's nothing to pay. Text us anytime to book a new time.`;
+  if (payment?.status === 'void') return 'This link was replaced or turned off, so nothing is owed on it. Check your texts for the latest link.';
+  if (payment && payment.status !== 'pending' && payment.status !== 'completed') return 'This link can no longer take a payment.';
+  return null;
+}
 
 // Where the short link sends people. Makes a fresh PayPal order if the old one went stale, so links never "expire".
 export async function checkoutFor(paymentId, { tip = 0, redirect = false } = {}) {
@@ -185,7 +199,9 @@ export async function checkoutFor(paymentId, { tip = 0, redirect = false } = {})
   if (!found) return { error: 'not_found' };
   const { booking, payment } = found;
   if (payment.status === 'completed') return { paid: true, booking, payment };
-  if (payment.status !== 'pending') return { error: payment.status, booking, payment };
+  const why = notPayable(booking, payment);
+  if (why) return { error: why, booking, payment };
+  tip = tipFor(payment, tip);
   if (!paypalReady) return { demo: true, booking, payment };
   const stale = Date.now() - Date.parse(payment.orderCreatedAt || 0) > 2 * 3600 * 1000;
   const wantMode = redirect ? 'redirect' : 'buttons';
@@ -305,6 +321,8 @@ export async function syncPayment(paymentId, { orderId = null } = {}) {
   if (orderId && !orderBelongs(payment, orderId)) throw new Error('That PayPal order is not for this payment.');
   const useOrder = orderId || payment.orderId;
   if (payment.status !== 'pending' || payment.mode !== 'paypal' || !useOrder) return found.booking;
+  // Never capture money for a booking that was canceled or refunded while the order sat approved.
+  if (notPayable(found.booking, payment)) return found.booking;
   const orderTip = (payment.orders || []).find((o) => o.id === useOrder)?.tip;
   const tip = orderTip === undefined ? null : orderTip;
   const order = await paypal.getOrder(useOrder);
@@ -324,10 +342,15 @@ export async function syncPayment(paymentId, { orderId = null } = {}) {
   return store.getBooking(found.booking.id);
 }
 
-// Demo mode only (no PayPal keys): lets the flow be tried end to end.
+// Demo money: the demo checkout (no PayPal keys) and "Load a sample day" (which runs even when keys are set).
+// It is saved as demo money, so refunds settle it here without calling PayPal and payouts never send it.
 export function completeDemoPayment(paymentId, { tip = 0 } = {}) {
+  const found = store.findPayment(paymentId);
+  if (found && found.payment.status === 'pending') store.updatePayment(paymentId, { mode: 'demo', demo: true });
   return completePayment(paymentId, { via: 'demo checkout', captureId: 'DEMO-' + paymentId, tip: clampTip(tip) || null });
 }
+// True for money that never went through PayPal's servers (demo checkout or a sample day).
+export const isDemoMoney = (p) => Boolean(p?.demo || p?.mode === 'demo' || String(p?.captureId || '').startsWith('DEMO-'));
 
 // ---------------- reminders ----------------
 export async function remind(bookingId) {
@@ -373,7 +396,9 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
     const part = Math.min(room, toRefund);
     let refundId = 'DEMO-REFUND';
     let refundStatus = 'COMPLETED';
-    if (p.mode === 'paypal' && p.captureId && paypalReady) {
+    if (isDemoMoney(p)) {
+      refundId = 'DEMO-REFUND';
+    } else if (p.mode === 'paypal' && p.captureId && paypalReady) {
       const r = await paypal.refundCapture(p.captureId, { amount: part < p.amount ? part : null, note: reason || 'Your payment has been refunded.' });
       refundId = r.refundId;
       refundStatus = r.status;
@@ -412,7 +437,9 @@ export async function customerCancel(bookingId, { notify = true } = {}) {
   const insideWindow = Date.now() <= Date.parse(b.freeCancelUntil);
   if (t.paid <= 0) {
     store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString() });
-    store.addTimeline(b.id, 'Customer canceled before paying. Hold released.');
+    // Turn off the deposit link too, so a canceled booking can't be paid for later.
+    b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+    store.addTimeline(b.id, 'Customer canceled before paying. Hold released and the payment link turned off.');
     store.logActivity(`${b.customerName} canceled ${b.slotLabel} (nothing was paid).`, { bookingId: b.id, kind: 'cancel' });
     await offerToWaitlist(b.presetId, b.slotStart, b.slotLabel);
     return { outcome: 'released', booking: store.getBooking(b.id) };
@@ -673,7 +700,8 @@ export async function sendRebookNudges({ force = false, presetId = null } = {}) 
 // Customers pay the platform's PayPal account. Once a job is paid in full, the net (gross minus refunds and
 // PayPal's fees) goes to the owner's PayPal email through Payouts. In demo mode it is recorded without moving money.
 // Only money that actually came in through PayPal is paid out: cash or check recorded by the owner never is.
-const viaPayPal = (p) => p.mode === 'paypal' || (p.mode === 'demo' && !paypalReady);
+// Demo money counts only on a server with no PayPal keys (where the payout is recorded, not sent).
+const viaPayPal = (p) => (isDemoMoney(p) ? !paypalReady : p.mode === 'paypal');
 export async function payoutForBooking(bookingId) {
   const b = store.getBooking(bookingId);
   if (!b || b.payout || b.status !== 'paid_in_full') return null;

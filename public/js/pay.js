@@ -50,6 +50,12 @@ function render() {
 
   const finished = payment.status === 'completed' || (payment.kind === 'deposit' && ['confirmed', 'paid_in_full', 'completed'].includes(booking.status));
   if (finished) return showDone();
+  if (['canceled', 'refunded', 'no_show'].includes(booking.status) && payment.status !== 'completed') {
+    $('#pay-area').classList.add('hidden');
+    $('#tip-box').classList.add('hidden');
+    $('#pay-error').textContent = `This booking was ${String(booking.statusWords || booking.status).toLowerCase()}, so there's nothing to pay. Text us anytime to book a new time.`;
+    return;
+  }
   if (payment.status === 'void') {
     $('#pay-area').classList.add('hidden');
     $('#pay-error').textContent = 'This link was replaced by new ones (for example, a split payment). Check your texts, or ask on the right.';

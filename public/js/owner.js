@@ -19,7 +19,30 @@ const ownerKeys = (() => {
   }
   return Object.values(keys).filter(Boolean).slice(0, 10);
 })();
-const hdr = { ...(code ? { 'x-owner-passcode': code } : {}), ...(ownerKeys.length ? { 'x-owner-key': ownerKeys.join(',') } : {}) };
+const baseHdr = { ...(code ? { 'x-owner-passcode': code } : {}), ...(ownerKeys.length ? { 'x-owner-key': ownerKeys.join(',') } : {}) };
+// The business this page shows. It is sent with every request (x-biz), so picking one in the dropdown changes
+// only this browser's page, never anyone else's. /owner?biz=<id> (the owner link from setup) opens that one;
+// otherwise the last one picked in this browser, else the server's default demo business.
+let biz = (() => {
+  const q = new URLSearchParams(location.search).get('biz');
+  if (q) return q;
+  try {
+    return localStorage.getItem('fad-owner-biz') || '';
+  } catch {
+    return '';
+  }
+})();
+function setBiz(id) {
+  biz = id || '';
+  try {
+    localStorage.setItem('fad-owner-biz', biz);
+  } catch {}
+  const q = new URLSearchParams(location.search);
+  if (biz) q.set('biz', biz);
+  else q.delete('biz');
+  history.replaceState(null, '', `${location.pathname}${q.toString() ? `?${q}` : ''}`);
+}
+const hdr = () => ({ ...baseHdr, ...(biz ? { 'x-biz': biz } : {}) });
 let seenOwner = 0;
 let busy = false;
 let refreshTimer = null;
@@ -88,8 +111,13 @@ function ownerThread(msgs) {
 }
 
 async function refresh() {
-  const s = await api('/api/owner/state', { headers: hdr });
+  const s = await api('/api/owner/state', { headers: hdr() });
   lastState = s;
+  // Asked for a business this browser can't open (no owner key): the server showed the demo one instead.
+  if (biz && s.business.id !== biz) {
+    if (s.presets.some((p) => p.id === biz)) toast('That business opens with its owner link. Showing the demo business.', 'bad');
+    setBiz(s.business.id);
+  }
   $('#biz').innerHTML = s.presets.map((p) => `<option value="${escapeHtml(p.id)}" ${p.id === s.business.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
   // Starting over is off on the hosted demo unless the host turns it on: hide the button when it would only fail.
   $('#reset').style.display = s.resetAllowed ? '' : 'none';
@@ -108,7 +136,7 @@ async function refresh() {
 }
 
 async function connections() {
-  const c = await api('/api/owner/connections', { headers: hdr });
+  const c = await api('/api/owner/connections', { headers: hdr() });
   $('#c-leadin').textContent = c.leadInUrl;
   $('#c-cal').textContent = c.calendarUrl;
   $('#c-mcp').textContent = c.mcpUrl;
@@ -159,7 +187,7 @@ async function saveConnections() {
   try {
     const r = await api('/api/owner/connections', {
       method: 'POST',
-      headers: hdr,
+      headers: hdr(),
       body: { busyCalendarUrl: $('#c-busy').value, webhookUrl: $('#c-webhook').value, payoutEmail: $('#c-payout').value, logoUrl: $('#c-logo').value, brandColor: $('#c-color').value },
     });
     toast('Saved.');
@@ -193,7 +221,7 @@ async function text(q) {
   thread.appendChild(t);
   thread.scrollTop = thread.scrollHeight;
   try {
-    await api('/api/owner/text', { method: 'POST', body: { text: q }, headers: hdr });
+    await api('/api/owner/text', { method: 'POST', body: { text: q }, headers: hdr() });
   } catch (err) {
     const e = document.createElement('div');
     e.className = 'bubble them';
@@ -256,7 +284,7 @@ $('#bookings').addEventListener('click', async (e) => {
   }
   b.disabled = true;
   try {
-    await api(`/api/owner/bookings/${id}/${act}`, { method: 'POST', body, headers: hdr });
+    await api(`/api/owner/bookings/${id}/${act}`, { method: 'POST', body, headers: hdr() });
     toast({ remind: `Reminder sent to ${name}.`, refund: `Refund sent to ${name}.`, done: `Marked done. ${name} got the balance link.`, cancel: `${name} got new times and a refund option.`, release: `Released ${name}'s hold.`, cash: `Recorded the payment from ${name}.` }[act] || 'Done.');
   } catch (err) {
     toast(err.message, 'bad');
@@ -264,18 +292,19 @@ $('#bookings').addEventListener('click', async (e) => {
   refresh();
 });
 $('#biz').addEventListener('change', async (e) => {
+  setBiz(e.target.value);
+  seenOwner = 0;
   try {
-    await api('/api/owner/preset', { method: 'POST', body: { presetId: e.target.value }, headers: hdr });
+    await refresh();
+    await connections();
   } catch (err) {
     toast(err.message, 'bad');
   }
-  refresh();
-  connections();
 });
 $('#seed').addEventListener('click', async () => {
   $('#seed').disabled = true;
   try {
-    await api('/api/owner/seed', { method: 'POST', headers: hdr });
+    await api('/api/owner/seed', { method: 'POST', headers: hdr() });
     toast('Sample day loaded.');
   } catch (err) {
     toast(err.message, 'bad');
@@ -287,7 +316,7 @@ $('#seed').addEventListener('click', async () => {
 $('#reset').addEventListener('click', async () => {
   if (!(await ask({ title: 'Start the demo over?', text: 'This clears every demo booking, message and payment.', ok: 'Clear it', danger: true }))) return;
   try {
-    await api('/api/owner/reset', { method: 'POST', headers: hdr });
+    await api('/api/owner/reset', { method: 'POST', headers: hdr() });
   } catch (err) {
     return toast(err.message, 'bad');
   }
@@ -297,12 +326,4 @@ $('#reset').addEventListener('click', async () => {
 
 await refresh();
 connections();
-// /owner?biz=<id> opens a specific business (used by the setup page's "owner's phone" link).
-const wantBiz = new URLSearchParams(location.search).get('biz');
-if (wantBiz && lastState && lastState.business.id !== wantBiz && lastState.presets.some((p) => p.id === wantBiz)) {
-  await api('/api/owner/preset', { method: 'POST', body: { presetId: wantBiz }, headers: hdr }).catch((err) => toast(err.message, 'bad'));
-  seenOwner = 0;
-  await refresh();
-  connections();
-}
 listen(`/api/events?owner=1${code ? `&code=${encodeURIComponent(code)}` : ''}`, scheduleRefresh);

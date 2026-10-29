@@ -55,12 +55,13 @@ const ownerOnly = (req, res, next) => {
 };
 // A business set up at /setup is managed only with its owner key (see owner-auth.js); demo businesses stay open.
 const denyOwner = (res) => res.status(403).json({ error: 'This business belongs to its owner. Open the owner page with the owner link from setup.' });
-// One visitor opening their own set-up business must not take the owner page over for everyone: a caller
-// without that business's owner key works on the default demo business for this request.
+// Each owner page names the business it is showing on every request (x-biz header or ?biz=), so one visitor
+// picking a business in the dropdown never changes anyone else's page. Nothing names one: the default demo
+// business. A set-up business is used only with its owner key; without it the request gets the default demo one.
 const ownerScope = (req, res, next) => {
-  const current = B.currentBusiness();
-  if (current.custom && !ownerKeyOk(current, credsFrom(req))) return B.withBusiness(presets[defaultPresetId], next);
-  next();
+  const named = B.businessById(String(req.get('x-biz') || req.query.biz || '').trim().slice(0, 80));
+  const business = named && ownerKeyOk(named, credsFrom(req)) ? named : presets[defaultPresetId];
+  return B.withBusiness(business, next);
 };
 // Owner action results never carry a booking's manage key.
 const noSecrets = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x, (k, v) => (k === 'secret' ? undefined : v))));
@@ -166,8 +167,8 @@ app.get('/api/pay/:paymentId', (req, res) => {
 });
 
 app.post('/api/pay/:paymentId/order', rateLimit(30, 10 * 60 * 1000), wrap(async (req, res) => {
-  const tip = B.clampTip(req.body.tip);
-  const r = await B.checkoutFor(req.params.paymentId, { tip, redirect: Boolean(req.body.redirect) });
+  // checkoutFor drops any tip on a deposit: tips go on the final bill only.
+  const r = await B.checkoutFor(req.params.paymentId, { tip: B.clampTip(req.body.tip), redirect: Boolean(req.body.redirect) });
   if (r.paid) return res.json({ paid: true });
   if (r.error) return res.status(400).json({ error: r.error });
   if (r.demo) return res.json({ demo: true });
@@ -177,9 +178,15 @@ app.post('/api/pay/:paymentId/order', rateLimit(30, 10 * 60 * 1000), wrap(async 
 app.post('/api/pay/:paymentId/capture', wrap(async (req, res) => {
   const found = store.findPayment(req.params.paymentId);
   if (!found) return res.status(404).json({ error: 'Not found' });
+  // A canceled or refunded booking's link takes no money.
+  if (found.payment.status !== 'completed') {
+    const why = B.notPayable(found.booking, found.payment);
+    if (why) return res.status(400).json({ error: why });
+  }
   if (!paypalReady) {
-    // Demo checkout only exists when the host has no PayPal keys. Same 0 to $500 tip rule as the order route.
-    if (found.payment.status === 'pending') B.completeDemoPayment(found.payment.id, { tip: B.clampTip(req.body.tip) });
+    // Demo checkout only exists when the host has no PayPal keys. Same 0 to $500 tip rule as the order route,
+    // and only on the final bill: a deposit takes no tip.
+    if (found.payment.status === 'pending') B.completeDemoPayment(found.payment.id, { tip: B.tipFor(found.payment, req.body.tip) });
   } else {
     // Capture the order the buyer approved, and only if this payment made it.
     const orderId = req.body.orderID ? String(req.body.orderID) : null;
@@ -354,12 +361,13 @@ app.post('/api/owner/bookings/:id/release', ownerOnly, ownerOfBooking, ownerActi
 app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerOfBooking, ownerAction((req) => B.recordOutsidePayment(req.params.id, { amount: Number(req.body.amount), method: String(req.body.method || 'cash') })));
 app.post('/api/owner/rebook', ownerOnly, ownerOfCurrent, ownerAction(() => B.sendRebookNudges({ force: true, presetId: B.currentBusiness().id })));
 
+// Kept for older pages: checks that this browser may open the business. It no longer changes a saved setting;
+// the page sends the business it shows on every request instead (see ownerScope).
 app.post('/api/owner/preset', ownerOnly, (req, res) => {
   const target = B.businessById(req.body.presetId);
   if (!target) return res.status(400).json({ error: 'Unknown business' });
   if (!ownerKeyOk(target, credsFrom(req))) return denyOwner(res);
-  store.setPreset(req.body.presetId);
-  res.json({ ok: true });
+  res.json({ ok: true, business: { id: target.id, name: target.name } });
 });
 app.post('/api/owner/seed', ownerOnly, ownerOfCurrent, wrap(async (req, res) => res.json({ ok: true, ...(await seedSampleDay(B.currentBusiness())) })));
 app.post('/api/owner/reset', ownerOnly, (req, res) => {

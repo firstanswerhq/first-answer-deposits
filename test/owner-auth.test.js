@@ -36,9 +36,10 @@ before(async () => {
 });
 after(() => server.close());
 
-async function call(method, url, { body, key, passcode } = {}) {
+async function call(method, url, { body, key, passcode, biz } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (key) headers['x-owner-key'] = key;
+  if (biz) headers['x-biz'] = biz;
   if (passcode) headers['x-owner-passcode'] = passcode;
   const res = await fetch(base + url, { method, headers, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, data: await res.json().catch(() => ({})) };
@@ -73,16 +74,16 @@ test('a set-up business needs its owner key; demo businesses stay open', async (
   assert.equal(peek.data.business.id, 'cleaning', 'a stranger sees the demo business, not the keyed one');
   assert.ok(!JSON.stringify(peek.data).includes('keyed.example'));
 
-  const set = await call('POST', '/api/owner/connections', { key: ownerKey, body: { payoutEmail: 'new@keyed.example', webhookUrl: 'https://1.1.1.1/hook' } });
+  const set = await call('POST', '/api/owner/connections', { key: ownerKey, biz: business.id, body: { payoutEmail: 'new@keyed.example', webhookUrl: 'https://1.1.1.1/hook' } });
   assert.equal(set.status, 200);
   const full = set.data.webhookSecret;
   assert.match(full, /^whsec_/, 'the new signing secret is shown once');
-  const own = await call('GET', '/api/owner/connections', { key: ownerKey });
+  const own = await call('GET', '/api/owner/connections', { key: ownerKey, biz: business.id });
   assert.equal(own.data.payoutEmail, 'new@keyed.example');
   assert.ok(own.data.webhookSecret && own.data.webhookSecret !== full && !own.data.webhookSecret.includes(full.slice(6, -4)), 'secret is masked afterwards');
 
   // Internal webhook addresses are refused when saved.
-  const ssrf = await call('POST', '/api/owner/connections', { key: ownerKey, body: { webhookUrl: 'https://169.254.169.254/latest' } });
+  const ssrf = await call('POST', '/api/owner/connections', { key: ownerKey, biz: business.id, body: { webhookUrl: 'https://169.254.169.254/latest' } });
   assert.equal(ssrf.status, 400);
 
   // A booking at the keyed business: refunds, the owner AI and the evidence file need the key.
@@ -104,7 +105,7 @@ test('a set-up business needs its owner key; demo businesses stay open', async (
   assert.equal(B.totals(store.getBooking(booking.id)).refunded, 0);
   const state = await call('GET', '/api/owner/state');
   assert.ok(!state.data.bookings.some((b) => b.id === booking.id), 'not listed to strangers');
-  assert.ok((await call('GET', '/api/owner/state', { key: ownerKey })).data.bookings.some((b) => b.id === booking.id), 'listed to its owner');
+  assert.ok((await call('GET', '/api/owner/state', { key: ownerKey, biz: business.id })).data.bookings.some((b) => b.id === booking.id), 'listed to its owner');
 
   // With the key, the owner can refund.
   const ok = await call('POST', `/api/owner/bookings/${booking.id}/refund`, { key: ownerKey, body: { amount: 5 } });
