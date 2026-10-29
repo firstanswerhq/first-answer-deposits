@@ -96,11 +96,11 @@ function ownerTools(business) {
       }),
     }),
     refund: tool({
-      description: 'Refund money to a customer through PayPal. Leave amount empty for a full refund.',
+      description: 'Refund money to a customer through PayPal. Leave amount empty for a full refund (job money plus any tip). An amount refunds that much of the job money only; any tip stays with the crew.',
       inputSchema: z.object({ bookingId: z.string(), amount: z.number().positive().optional(), reason: z.string().optional() }),
       execute: safe(async ({ bookingId, amount, reason }) => {
         const r = await B.refund(mine(bookingId), { amount: amount || null, reason: reason || '' });
-        return { refunded: r.refunded, reference: r.reference, status: B.STATUS_WORDS[r.booking.status] };
+        return { refunded: r.refunded, jobMoneyRefunded: r.jobRefunded, tipRefunded: r.tipRefunded, tipKept: B.totals(r.booking).tips, reference: r.reference, status: B.STATUS_WORDS[r.booking.status] };
       }),
     }),
     business_cancel: tool({

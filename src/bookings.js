@@ -88,11 +88,14 @@ export function totals(booking) {
   const done = booking.payments.filter((p) => p.status === 'completed' || p.status === 'refunded');
   const paidGross = sum(done.filter((p) => p.kind !== 'tip').map((p) => p.amount));
   const tipsGross = sum(done.map((p) => p.tip || 0));
+  const tipsRefunded = sum(booking.payments.map((p) => p.refund?.tip || 0));
   const refunded = sum(booking.payments.map((p) => p.refund?.amount || 0));
   const paid = round2(paidGross - refunded);
-  const due = Math.max(0, round2(total - paid));
+  // A canceled, refunded or no-show booking is closed: nothing more is owed on it.
+  const due = CLOSED.includes(booking.status) ? 0 : Math.max(0, round2(total - paid));
   const depositPaid = sum(done.filter((p) => p.kind === 'deposit').map((p) => p.amount)) - sum(booking.payments.filter((p) => p.kind === 'deposit').map((p) => p.refund?.amount || 0));
-  return { total, paid, due, tips: tipsGross, refunded, depositPaid: round2(depositPaid) };
+  // tips: tips the crew keeps (net of any tip refunded). refunded: job money refunded; tipsRefunded: tips refunded.
+  return { total, paid, due, tips: round2(tipsGross - tipsRefunded), tipsRefunded, refunded, depositPaid: round2(depositPaid) };
 }
 
 // Free to cancel until 24 hours before the job. Last-minute bookings still get an hour to change their mind,
@@ -378,56 +381,68 @@ export function owing({ presetId = null } = {}) {
 }
 
 // ---------------- refunds and cancellations ----------------
+// A full refund (no amount) sends back everything: what was paid toward the job plus any tip. A partial refund
+// (an amount) comes out of the job money only; tips stay with the crew, and the messages say so.
 export async function refund(bookingId, { amount = null, reason = '', newStatus = 'refunded', notify = true } = {}) {
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
   const t = totals(b);
-  if (t.paid <= 0) throw new Error(`${b.customerName} hasn't paid anything, so there is nothing to refund.`);
-  // No amount means a full refund. Any amount given must be a real number above zero and no more than was paid.
   const full = amount === null || amount === undefined || amount === '';
+  if (t.paid <= 0 && !(full && t.tips > 0)) throw new Error(`${b.customerName} hasn't paid anything, so there is nothing to refund.`);
+  // Any amount given must be a real number above zero and no more than was paid toward the job.
   const asked = full ? t.paid : Number(amount);
   if (!full && (!Number.isFinite(asked) || asked <= 0)) throw new Error('Enter a refund amount above $0, or leave it empty for a full refund.');
-  if (asked > t.paid + 0.001) throw new Error(`${b.customerName} paid ${usd(t.paid)}, so the most you can refund is ${usd(t.paid)}.`);
+  if (asked > t.paid + 0.001) throw new Error(`${b.customerName} paid ${usd(t.paid)} toward the job, so the most you can refund is ${usd(t.paid)}${t.tips > 0 ? ` (a full refund also returns the ${usd(t.tips)} tip)` : ''}.`);
   let toRefund = round2(asked);
   const refunds = [];
   // Refund newest captures first.
   for (const p of [...b.payments].reverse()) {
-    if (toRefund <= 0) break;
     if (p.status !== 'completed' || p.kind === 'tip') continue;
     const already = p.refund?.amount || 0;
+    const tipAlready = p.refund?.tip || 0;
     const room = round2(p.amount - already);
-    if (room <= 0) continue;
-    const part = Math.min(room, toRefund);
+    const part = Math.max(0, Math.min(room, toRefund));
+    const tipPart = full ? round2((p.tip || 0) - tipAlready) : 0;
+    if (part <= 0 && tipPart <= 0) continue;
+    const back = round2(part + tipPart);
     let refundId = 'DEMO-REFUND';
     let refundStatus = 'COMPLETED';
     if (isDemoMoney(p)) {
       refundId = 'DEMO-REFUND';
     } else if (p.mode === 'paypal' && p.captureId && paypalReady) {
-      const r = await paypal.refundCapture(p.captureId, { amount: part < p.amount ? part : null, note: reason || 'Your payment has been refunded.' });
+      // The capture holds the amount plus the tip. Refund the whole capture only when all of it goes back.
+      const whole = already === 0 && tipAlready === 0 && back + 0.001 >= round2(p.amount + (p.tip || 0));
+      const r = await paypal.refundCapture(p.captureId, { amount: whole ? null : back, note: reason || 'Your payment has been refunded.' });
       refundId = r.refundId;
       refundStatus = r.status;
     } else if (p.mode === 'outside' || p.mode === 'cash' || p.method === 'cash' || p.method === 'check') {
       refundId = 'OUTSIDE-PAYPAL';
     }
-    store.updatePayment(p.id, { refund: { amount: round2(already + part), refundId, status: refundStatus, at: new Date().toISOString() } });
-    refunds.push({ amount: part, refundId, status: refundStatus, method: p.via === 'paypal' || p.mode === 'paypal' ? 'PayPal' : p.method || 'original payment' });
+    store.updatePayment(p.id, { refund: { amount: round2(already + part), tip: round2(tipAlready + tipPart), refundId, status: refundStatus, at: new Date().toISOString() } });
+    refunds.push({ amount: part, tip: tipPart, refundId, status: refundStatus, method: p.via === 'paypal' || p.mode === 'paypal' ? 'PayPal' : p.method || 'original payment' });
     toRefund = round2(toRefund - part);
   }
-  const total = sum(refunds.map((r) => r.amount));
-  const fullyRefunded = totals(store.getBooking(b.id)).paid <= 0.001;
+  const jobBack = sum(refunds.map((r) => r.amount));
+  const tipBack = sum(refunds.map((r) => r.tip));
+  const total = round2(jobBack + tipBack);
+  const after = totals(store.getBooking(b.id));
+  const fullyRefunded = after.paid <= 0.001;
   store.updateBooking(b.id, { status: fullyRefunded ? newStatus : b.status, refundedAt: new Date().toISOString(), refundReason: reason });
   const ref = refunds.map((r) => r.refundId).join(', ');
-  store.addTimeline(b.id, `Refunded ${usd(total)}${reason ? ` (${reason})` : ''}. PayPal refund ${ref}.`);
+  // What went back, in plain words: "$114 plus the $500 tip ($614 in all)" or "$50 of the $114 paid; the $20 tip was not refunded".
+  const what = tipBack > 0 ? `${usd(jobBack)} plus the ${usd(tipBack)} tip (${usd(total)} in all)` : !full && t.paid - jobBack > 0.001 ? `${usd(jobBack)} of the ${usd(t.paid)} paid` : usd(total);
+  const tipNote = !full && t.tips > 0 ? ` The ${usd(t.tips)} tip was not refunded.` : '';
+  store.addTimeline(b.id, `Refunded ${what}${reason ? ` (${reason})` : ''}.${tipNote} PayPal refund ${ref}.`);
   if (notify) {
     store.addMessage(
       b.leadId,
       'assistant',
-      `Your refund of ${usd(total)} is on its way back to the account you paid with. Reference: ${ref}. It shows in PayPal right away; if you paid by card, your bank can take a few business days to post it.`,
+      `Your refund of ${what} is on its way back to the account you paid with.${tipNote} Reference: ${ref}. It shows in PayPal right away; if you paid by card, your bank can take a few business days to post it.`,
       { kind: 'refund' },
     );
   }
-  store.logActivity(`Refunded ${usd(total)} to ${b.customerName}${reason ? ` (${reason})` : ''}.`, { bookingId: b.id, kind: 'refund' });
-  return { booking: store.getBooking(b.id), refunded: total, reference: ref };
+  store.logActivity(`Refunded ${what} to ${b.customerName}${reason ? ` (${reason})` : ''}.${tipNote}`, { bookingId: b.id, kind: 'refund' });
+  return { booking: store.getBooking(b.id), refunded: total, jobRefunded: jobBack, tipRefunded: tipBack, reference: ref };
 }
 
 // Customer cancels. The policy they saw at booking is applied automatically.
@@ -688,7 +703,7 @@ export function joinWaitlist(leadId, note = '') {
   const existing = store.listWaitlist().find((w) => w.leadId === leadId && w.status === 'waiting');
   if (existing) return existing;
   const item = store.addToWaitlist({ leadId, presetId: lead.presetId, name: lead.name || 'Customer', note });
-  store.logActivity(`${lead.name || 'A customer'} joined the waitlist${note ? ` (${note})` : ''}.`, { kind: 'waitlist' });
+  store.logActivity(`${lead.name || 'A customer'} joined the waitlist${note ? ` (${note})` : ''}.`, { kind: 'waitlist', leadId, presetId: lead.presetId });
   return item;
 }
 
@@ -743,7 +758,7 @@ export async function payoutForBooking(bookingId) {
   const business = businessOf(b);
   const captured = b.payments.filter((p) => (p.status === 'completed' || p.status === 'refunded') && viaPayPal(p));
   const gross = sum(captured.map((p) => Number(p.amount || 0) + Number(p.tip || 0)));
-  const refunds = sum(captured.map((p) => p.refund?.amount || 0));
+  const refunds = sum(captured.map((p) => (p.refund?.amount || 0) + (p.refund?.tip || 0)));
   const fees = sum(captured.map((p) => p.fee || 0));
   const amount = round2(gross - refunds - fees);
   if (amount <= 0) return null;
@@ -766,8 +781,8 @@ export function moneySummary({ days = 7, presetId = null } = {}) {
   const done = payments.filter((p) => (p.status === 'completed' || p.refund) && Date.parse(p.completedAt || p.createdAt) >= since);
   const gross = sum(done.map((p) => p.amount + (p.tip || 0)));
   const fees = sum(done.map((p) => p.fee || 0));
-  const refunds = sum(done.map((p) => p.refund?.amount || 0));
-  const tips = sum(done.map((p) => p.tip || 0));
+  const refunds = sum(done.map((p) => (p.refund?.amount || 0) + (p.refund?.tip || 0)));
+  const tips = sum(done.map((p) => (p.tip || 0) - (p.refund?.tip || 0)));
   const pending = sum(payments.filter((p) => p.status === 'pending').map((p) => p.amount));
   const kept = sum(all.filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
   const paidOut = sum(all.filter((b) => b.payout && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));

@@ -158,3 +158,53 @@ test("\"Can't make it\" works only on held or confirmed bookings", async () => {
   const held = await book('Held', { slot: 2 });
   assert.equal((await call('POST', `/api/owner/bookings/${held.id}/cancel`, { body: {} })).status, 200);
 });
+
+// ---------- 4. owner table display ----------
+test('owner page bookings are scoped to the business shown; closed bookings owe $0', async () => {
+  store.resetAll();
+  assert.equal((await call('POST', '/api/owner/seed', { biz: 'cleaning' })).status, 200);
+  assert.equal((await call('POST', '/api/owner/seed', { biz: 'hvac' })).status, 200);
+  const hvac = await call('GET', '/api/owner/state', { biz: 'hvac' });
+  assert.ok(hvac.data.bookings.length > 0);
+  assert.ok(hvac.data.bookings.every((b) => store.getBooking(b.id).presetId === 'hvac'), 'only HVAC bookings');
+  assert.ok(hvac.data.leads.every((l) => l.presetId === 'hvac'), 'only HVAC leads');
+  assert.equal(hvac.data.waitlist.length, 1, 'only the HVAC waitlist');
+  assert.ok(hvac.data.waitlist.every((w) => w.presetId === 'hvac'));
+  const cleaningIds = new Set(store.listBookings().filter((b) => b.presetId === 'cleaning').map((b) => b.id));
+  assert.ok(hvac.data.activity.length > 0 && hvac.data.activity.every((a) => !cleaningIds.has(a.bookingId)), 'no cleaning activity on the HVAC page');
+  const clean = await call('GET', '/api/owner/state', { biz: 'cleaning' });
+  assert.ok(clean.data.bookings.every((b) => store.getBooking(b.id).presetId === 'cleaning'));
+
+  // A canceled booking owes nothing.
+  const priya = store.listBookings().find((b) => b.presetId === 'cleaning' && b.status === 'held');
+  await B.releaseHold(priya.id);
+  const row = (await call('GET', '/api/owner/state', { biz: 'cleaning' })).data.bookings.find((b) => b.id === priya.id);
+  assert.equal(row.status, 'canceled');
+  assert.equal(row.totals.due, 0);
+});
+
+test('a full refund returns the tip too; a partial refund keeps it and says so', async () => {
+  store.resetAll();
+  const m = await paidWithTip('Marcus', 500);
+  const paidBefore = B.totals(m).paid;
+  const r = await call('POST', `/api/owner/bookings/${m.id}/refund`, { body: {} });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.result.refunded, paidBefore + 500);
+  assert.equal(r.data.result.tipRefunded, 500);
+  const after = store.getBooking(m.id);
+  assert.equal(after.status, 'refunded');
+  assert.equal(B.totals(after).tips, 0, 'no tip kept');
+  assert.equal(B.totals(after).tipsRefunded, 500);
+  assert.match(store.getLead(m.leadId).messages.at(-1).text, /plus the \$500 tip/);
+
+  const p = await paidWithTip('Pat', 20, { slot: 1 });
+  const pr = await B.refund(p.id, { amount: 50, reason: 'missed a spot', notify: true });
+  assert.equal(pr.refunded, 50);
+  assert.equal(pr.tipRefunded, 0);
+  assert.equal(B.totals(store.getBooking(p.id)).tips, 20, 'tip kept on a partial refund');
+  assert.match(store.getLead(p.leadId).messages.at(-1).text, /The \$20 tip was not refunded/);
+
+  // Nothing paid: a refund is refused (the owner page hides the button for these rows).
+  const z = await book('Zed', { slot: 2 });
+  assert.equal((await call('POST', `/api/owner/bookings/${z.id}/refund`, { body: {} })).status, 400);
+});

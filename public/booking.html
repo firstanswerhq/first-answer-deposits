@@ -53,7 +53,7 @@
         const t = b.totals;
         const rows = [['Total', money(t.total)], ['Paid so far', money(t.paid)]];
         if (t.tips) rows.push(['Tips', money(t.tips)]);
-        if (t.refunded) rows.push(['Refunded', money(t.refunded)]);
+        if (t.refunded || t.tipsRefunded) rows.push(['Refunded', money(t.refunded + (t.tipsRefunded || 0)) + (t.tipsRefunded ? ` (incl. ${money(t.tipsRefunded)} tip)` : '')]);
         rows.push(['Still owed', money(t.due), 'due']);
         $('#rows').innerHTML = rows.map(([a, v, c]) => `<li class="${c || ''}"><span>${a}</span><strong>${v}</strong></li>`).join('');
         $('#policy').innerHTML = ['canceled', 'refunded', 'paid_in_full', 'no_show'].includes(b.status)
@@ -61,7 +61,7 @@
           : `Free to cancel or move until <strong>${escapeHtml(b.freeCancelUntil)}</strong>. Rescheduling is always free; anything you've paid moves with the booking.`;
         if (payLink) { $('#pay').href = payLink; $('#pay').classList.remove('hidden'); } else $('#pay').classList.add('hidden');
         $('#payments').innerHTML = b.payments.length
-          ? '<tr><th>What</th><th>How</th><th>Status</th><th class="num">Amount</th></tr>' + b.payments.map((p) => `<tr><td>${escapeHtml(p.label || p.kind)}</td><td>${escapeHtml(p.via || '')}</td><td>${p.refund ? `Refunded ${money(p.refund.amount)}<div class="small muted">Ref ${escapeHtml(p.refund.refundId)}</div>` : escapeHtml(p.status)}</td><td class="num">${money(p.amount)}${p.tip ? `<div class="small muted">+${money(p.tip)} tip</div>` : ''}</td></tr>`).join('')
+          ? '<tr><th>What</th><th>How</th><th>Status</th><th class="num">Amount</th></tr>' + b.payments.map((p) => `<tr><td>${escapeHtml(p.label || p.kind)}</td><td>${escapeHtml(p.via || '')}</td><td>${p.refund ? `Refunded ${money(p.refund.amount + (p.refund.tip || 0))}${p.refund.tip ? ` (incl. ${money(p.refund.tip)} tip)` : ''}<div class="small muted">Ref ${escapeHtml(p.refund.refundId)}</div>` : escapeHtml(p.status)}</td><td class="num">${money(p.amount)}${p.tip ? `<div class="small muted">+${money(p.tip)} tip</div>` : ''}</td></tr>`).join('')
           : '<tr><td class="muted">No payments yet.</td></tr>';
         $('#timeline').innerHTML = b.timeline.map((x) => `<li><time>${new Date(x.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${clock(x.at)}</time>${escapeHtml(x.text)}</li>`).join('');
       } catch (err) {

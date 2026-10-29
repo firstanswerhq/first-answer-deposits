@@ -36,6 +36,6 @@ export async function seedSampleDay(business) {
   const w = store.createLead({ name: 'Dana Whitfield', presetId: business.id });
   B.joinWaitlist(w.id, 'Saturday mornings');
 
-  store.logActivity('Loaded a sample day: one paid job, one confirmed, one waiting on a deposit, one on the waitlist.', { kind: 'seed' });
+  store.logActivity('Loaded a sample day: one paid job, one confirmed, one waiting on a deposit, one on the waitlist.', { kind: 'seed', presetId: business.id });
   return { bookings: made.length };
 }

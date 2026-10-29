@@ -68,6 +68,11 @@ function kpis(s) {
   $('#kpis').innerHTML = tiles.map(([l, v]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
 }
 
+// Closed bookings owe nothing, whatever the bill said before.
+const CLOSED = ['canceled', 'refunded', 'no_show'];
+// A refund only makes sense when money (or a tip) is still in: no Refund button on a $0 booking.
+const refundable = (b) => b.totals.paid > 0 || b.totals.tips > 0;
+
 function bookings(list) {
   if (!list.length) {
     $('#bookings').innerHTML = '<tr><td class="muted">No bookings yet. Open the customer\'s phone and text the business.</td></tr>';
@@ -77,11 +82,11 @@ function bookings(list) {
     '<tr><th>Customer</th><th>Appointment</th><th>Status</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Owed</th><th></th></tr>' +
     list
       .map((b) => {
-        const acts = (ACTIONS[b.status] || []).map(([a, label]) => `<button class="btn secondary small" data-act="${a}" data-id="${b.id}">${label}</button>`).join('');
+        const acts = (ACTIONS[b.status] || []).filter(([a]) => a !== 'refund' || refundable(b)).map(([a, label]) => `<button class="btn secondary small" data-act="${a}" data-id="${b.id}">${label}</button>`).join('');
         return `<tr><td><strong>${escapeHtml(b.customerName)}</strong><div class="small muted">${escapeHtml(b.title || b.service)}</div></td>
           <td>${escapeHtml(b.appointment)}</td>
           <td><span class="status ${b.status}">${escapeHtml(b.statusWords)}</span></td>
-          <td class="num">${money(b.totals.total)}</td><td class="num">${money(b.totals.paid)}${b.totals.tips ? `<div class="small muted">+${money(b.totals.tips)} tip</div>` : ''}</td><td class="num">${money(b.totals.due)}</td>
+          <td class="num">${money(b.totals.total)}</td><td class="num">${money(b.totals.paid)}${b.totals.tips ? `<div class="small muted">+${money(b.totals.tips)} tip</div>` : ''}${b.totals.refunded || b.totals.tipsRefunded ? `<div class="small muted">${money(b.totals.refunded + b.totals.tipsRefunded)} refunded</div>` : ''}</td><td class="num">${CLOSED.includes(b.status) ? '<span class="muted" title="Closed: nothing owed">—</span>' : money(b.totals.due)}</td>
           <td><div class="actions">${acts}<a class="btn ghost small" href="/evidence/${encodeURIComponent(b.id)}${code ? `?code=${encodeURIComponent(code)}` : ''}" target="_blank" title="Everything about this booking in one file">Record</a></div></td></tr>`;
       })
       .join('');
@@ -265,7 +270,9 @@ $('#bookings').addEventListener('click', async (e) => {
   if (act === 'refund') {
     const okRefund = await ask({
       title: `Refund ${name}?`,
-      text: `${money(bk ? bk.totals.paid : 0)} goes back through PayPal to the account they paid with, and they get a text with the reference number.`,
+      text: bk && bk.totals.tips > 0
+        ? `Full refund: the ${money(bk.totals.paid)} they paid plus the ${money(bk.totals.tips)} tip (${money(bk.totals.paid + bk.totals.tips)} in all) goes back through PayPal to the account they paid with, and they get a text with the reference number.`
+        : `${money(bk ? bk.totals.paid : 0)} goes back through PayPal to the account they paid with, and they get a text with the reference number.`,
       ok: 'Refund',
       danger: true,
     });
@@ -285,7 +292,7 @@ $('#bookings').addEventListener('click', async (e) => {
   b.disabled = true;
   try {
     await api(`/api/owner/bookings/${id}/${act}`, { method: 'POST', body, headers: hdr() });
-    toast({ remind: `Reminder sent to ${name}.`, refund: `Refund sent to ${name}.`, done: `Marked done. ${name} got the balance link.`, cancel: `${name} got new times and a refund option.`, release: `Released ${name}'s hold.`, cash: `Recorded the payment from ${name}.` }[act] || 'Done.');
+    toast({ remind: `Reminder sent to ${name}.`, refund: bk && bk.totals.tips > 0 ? `Refunded ${money(bk.totals.paid + bk.totals.tips)} to ${name}, tip included.` : `Refund sent to ${name}.`, done: `Marked done. ${name} got the balance link.`, cancel: `${name} got new times and a refund option.`, release: `Released ${name}'s hold.`, cash: `Recorded the payment from ${name}.` }[act] || 'Done.');
   } catch (err) {
     toast(err.message, 'bad');
   }
