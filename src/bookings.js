@@ -422,14 +422,29 @@ export async function reconcileInvoices() {
 
 // "Email me an invoice": the deposit goes out as a PayPal invoice (Invoicing v2) to the customer's email, as
 // another way to pay the same deposit. Whichever is paid first counts; the other is turned off.
-export async function emailDepositInvoice(bookingId, { email = '' } = {}) {
+// Invoices go to a real-looking address, at most MAX_INVOICE_SENDS per booking, and to a different address than
+// the last one only after the customer confirms it (confirmNewAddress), so the app can't be used to email strangers.
+export const MAX_INVOICE_SENDS = 2;
+const EMAIL_RE = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,24}$/;
+export function validEmail(e) {
+  const s = String(e || '').trim();
+  return s.length <= 120 && EMAIL_RE.test(s) && !s.includes('..') && !s.startsWith('.') && !s.includes('.@') ? s : null;
+}
+export async function emailDepositInvoice(bookingId, { email = '', confirmNewAddress = false } = {}) {
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
   const pending = b.payments.find((p) => p.status === 'pending' && p.kind === 'deposit');
   if (b.status !== 'held' || !pending) throw new Error("There's no deposit waiting on this booking, so there's nothing to invoice.");
-  const to = String(email || b.customerEmail || '').trim().slice(0, 120);
-  if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(to)) throw new Error('Sure! What email should I send the invoice to?');
-  if (pending.invoice?.status === 'sent' && pending.invoice.to === to) return { message: `The invoice is already in ${to}'s inbox. You can also pay right here: ${payPageUrl(pending)}`, invoiceId: pending.invoice.id };
+  const raw = String(email || b.invoiceTo || b.customerEmail || '').trim().slice(0, 120);
+  if (!raw) throw new Error('Sure! What email should I send the invoice to?');
+  const to = validEmail(raw);
+  if (!to) throw new Error(`"${raw.slice(0, 60)}" doesn't look like an email address. What email should I send the invoice to?`);
+  if (pending.invoice?.status === 'sent' && pending.invoice.to.toLowerCase() === to.toLowerCase()) return { message: `The invoice is already in ${to}'s inbox. You can also pay right here: ${payPageUrl(pending)}`, invoiceId: pending.invoice.id };
+  const sends = b.invoiceSends || 0;
+  if (sends >= MAX_INVOICE_SENDS) throw new Error(`I've already emailed ${sends} invoices for this booking, so I can't send another one. You can pay the ${usd(pending.amount)} deposit right here: ${payPageUrl(pending)}`);
+  if (b.invoiceTo && b.invoiceTo.toLowerCase() !== to.toLowerCase() && !confirmNewAddress) {
+    return { needsConfirmation: true, email: to, message: `I already emailed the invoice to ${b.invoiceTo}. Send a new one to ${to} instead? The first one gets canceled. Reply YES to send it.` };
+  }
   const business = businessOf(b);
   let invoice;
   if (paypalReady) {
@@ -454,7 +469,7 @@ export async function emailDepositInvoice(bookingId, { email = '' } = {}) {
     store.updatePayment(pending.id, { invoices: [...(old.invoices || []), old.invoice].slice(-10) });
   }
   store.updatePayment(pending.id, { invoice: { ...invoice, amount: pending.amount } });
-  store.updateBooking(b.id, { customerEmail: to });
+  store.updateBooking(b.id, { customerEmail: to, invoiceTo: to, invoiceSends: sends + 1 });
   store.addTimeline(b.id, `Deposit invoice ${invoice.id} for ${usd(pending.amount)} ${invoice.demo ? 'recorded (demo mode: no email sent)' : `sent to ${to} through PayPal Invoicing`}.`);
   store.logActivity(`${invoice.demo ? 'Recorded a demo' : 'Sent a PayPal'} invoice for ${b.customerName}'s ${usd(pending.amount)} deposit${invoice.demo ? '' : ` to ${to}`}.`, { bookingId: b.id, kind: 'invoice' });
   const message = invoice.demo

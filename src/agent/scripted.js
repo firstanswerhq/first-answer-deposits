@@ -130,6 +130,18 @@ export async function scriptedCustomerReply(lead) {
   const isQuestion = /\?\s*$/.test(last.trim()) || /^(what|can|could|how|is|are|do|does|will|would)\b/.test(t);
 
   if (booking) {
+    // "Send a new invoice to this other address?" was asked: YES sends it, anything else drops the question.
+    if (flow.invoiceConfirm) {
+      const to = flow.invoiceConfirm;
+      save({ invoiceConfirm: null });
+      if (/^\s*(yes|y|yep|yeah|sure|ok|okay|send it)\b/.test(t)) {
+        try {
+          return (await B.emailDepositInvoice(booking.id, { email: to, confirmNewAddress: true })).message;
+        } catch (err) {
+          return err.message;
+        }
+      }
+    }
     if (/\b(yes|approve|ok)\b/.test(t) && booking.changes.some((c) => c.status === 'proposed')) {
       B.decideChange(booking.id, null, true);
       return 'Thanks, that change is approved.';
@@ -148,9 +160,12 @@ export async function scriptedCustomerReply(lead) {
     if (/(over time|pay later|installment|pay in 4|monthly|financ|afford|payment plan)/.test(t)) return payLaterAnswer(booking);
     const email = (last.match(/[^\s@]+@[^\s@]+\.[a-z]{2,}/i) || [''])[0];
     const askedForEmail = /What email should I send the invoice to/.test(lead.messages.filter((m) => m.role === 'assistant').at(-1)?.text || '');
-    if (/\b(invoice|e-?mail me|email it|bill me)\b/.test(t) || (email && askedForEmail)) {
+    // A new address after an invoice already went out counts as an invoice request too (it asks before sending).
+    const invoiceSent = booking.payments.some((p) => p.invoice);
+    if (/\b(invoice|e-?mail me|email it|bill me)\b/.test(t) || (email && (askedForEmail || invoiceSent))) {
       try {
         const r = await B.emailDepositInvoice(booking.id, { email });
+        if (r.needsConfirmation) store.updateLead(lead.id, { flow: { ...(store.getLead(lead.id).flow || {}), invoiceConfirm: r.email } });
         return r.message;
       } catch (err) {
         return err.message;

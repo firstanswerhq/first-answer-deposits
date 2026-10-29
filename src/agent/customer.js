@@ -205,12 +205,15 @@ function customerTools(lead, business, state) {
       }),
     }),
     email_invoice: tool({
-      description: 'Email the customer a PayPal invoice for the deposit that is due (another way to pay the same deposit). Needs their email address; ask for it if you do not have it.',
-      inputSchema: z.object({ email: z.string().optional().describe("the customer's email address") }),
-      execute: safe(async ({ email }) => {
+      description: 'Email the customer a PayPal invoice for the deposit that is due (another way to pay the same deposit). Needs their email address; ask for it if you do not have it. At most 2 invoices per booking. If an invoice already went to another address it returns needsConfirmation: send its message, and only after the customer replies YES call again with confirm_new_address true.',
+      inputSchema: z.object({ email: z.string().optional().describe("the customer's email address"), confirm_new_address: z.boolean().optional().describe('true only after the customer said YES to sending to a new address') }),
+      execute: safe(async ({ email, confirm_new_address }) => {
         const b = getBooking();
         if (!b) return { error: 'No booking.' };
-        return B.emailDepositInvoice(b.id, { email: email || '' });
+        // The YES must be the customer's own latest message, not the model's guess.
+        const lastCustomer = (store.getLead(lead.id)?.messages || []).filter((m) => m.role === 'customer').at(-1)?.text || '';
+        const confirmed = Boolean(confirm_new_address) && /^\s*(yes|y|yep|yeah|sure|ok|okay|send it)\b/i.test(lastCustomer);
+        return B.emailDepositInvoice(b.id, { email: email || '', confirmNewAddress: confirmed });
       }),
     }),
     join_waitlist: tool({

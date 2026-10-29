@@ -240,3 +240,33 @@ test('the pay page and booking page never show the PayPal vault id', async () =>
   }
   assert.match(JSON.stringify(pay.data), /PayPal wallet saved for this booking/);
 });
+
+// ---------- 12. invoice email limits ----------
+test('invoices: valid emails only, a new address needs a YES, at most 2 per booking; the scripted desk handles a new email', async () => {
+  store.resetAll();
+  const { scriptedCustomerReply } = await import('../src/agent/scripted.js');
+  const biz = B.businessById('cleaning');
+  const s = B.availableSlots(biz, { limit: 1 })[0];
+  const lead = store.createLead({ presetId: 'cleaning' });
+  const { booking } = await B.bookAndRequestDeposit({ leadId: lead.id, serviceId: 'deep', size: '3 bedrooms', slotStart: s.start, customerName: 'Ivy' });
+  await assert.rejects(B.emailDepositInvoice(booking.id, { email: 'a@b' }), /doesn't look like an email/);
+  await assert.rejects(B.emailDepositInvoice(booking.id, { email: 'x..y@example.com' }), /doesn't look like an email/);
+  const say = async (t) => {
+    store.addMessage(lead.id, 'customer', t);
+    const reply = await scriptedCustomerReply(store.getLead(lead.id));
+    store.addMessage(lead.id, 'assistant', reply);
+    return reply;
+  };
+  assert.match(await say('Email me an invoice'), /What email/);
+  assert.match(await say('ivy@example.com'), /invoice/i);
+  assert.equal(store.getBooking(booking.id).invoiceSends, 1);
+  // A different address: asked first, nothing sent.
+  const ask = await say('actually send it to boss@example.com');
+  assert.match(ask, /already emailed the invoice to ivy@example\.com.*Reply YES/);
+  assert.equal(store.getBooking(booking.id).invoiceSends, 1);
+  assert.match(await say('yes'), /boss@example\.com/);
+  assert.equal(store.getBooking(booking.id).invoiceSends, 2);
+  // A third send is refused, even confirmed.
+  await assert.rejects(B.emailDepositInvoice(booking.id, { email: 'third@example.com', confirmNewAddress: true }), /already emailed 2 invoices/);
+  assert.equal(store.getBooking(booking.id).payments[0].invoice.to, 'boss@example.com');
+});
