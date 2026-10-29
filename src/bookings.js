@@ -242,14 +242,21 @@ async function voidHold(payment) {
 }
 
 // A hold whose honor period ends soon, on a booking that is still on, is captured before PayPal stops honoring it.
+// A booking still waiting on the rest of a split deposit when a paid share's honor period ends is released instead:
+// the share's hold is voided (never charged), since the time was never confirmed.
 export async function settleExpiringHolds(now = Date.now()) {
   let n = 0;
-  for (const b of store.listBookings().filter((x) => ['confirmed', 'completed', 'needs_rebook'].includes(x.status))) {
-    for (const p of b.payments.filter((x) => x.status === 'completed' && x.hold?.status === 'authorized')) {
-      if (Date.parse(p.hold.honorUntil) - now <= BILL_MARGIN_HOURS * HOUR) {
-        await captureHold(p.id, "PayPal's 3-day hold window was ending, so the deposit was captured as a regular deposit");
-        n++;
-      }
+  for (const b of store.listBookings().filter((x) => ['held', 'confirmed', 'completed', 'needs_rebook'].includes(x.status))) {
+    const ending = b.payments.filter((x) => x.status === 'completed' && x.hold?.status === 'authorized' && Date.parse(x.hold.honorUntil) - now <= BILL_MARGIN_HOURS * HOUR);
+    if (!ending.length) continue;
+    if (b.status === 'held') {
+      await releaseHold(b.id, "PayPal's 3-day hold window was ending before the rest of the deposit came in");
+      n += ending.length;
+      continue;
+    }
+    for (const p of ending) {
+      await captureHold(p.id, "PayPal's 3-day hold window was ending, so the deposit was captured as a regular deposit");
+      n++;
     }
   }
   return n;
@@ -914,9 +921,15 @@ export async function releaseHold(bookingId, reason = 'Deposit not paid in time'
   if (b.status !== 'held') throw new Error(`${b.customerName}'s booking is ${STATUS_WORDS[b.status] || b.status}, not an unpaid hold.`);
   store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), cancelReason: reason });
   await Promise.all(b.payments.filter((p) => p.status === 'pending').map(voidPayment));
-  store.addMessage(b.leadId, 'assistant', `We released the hold on ${b.slotLabel} since the deposit didn't come through. Text us anytime and we'll find you a new time.`, { kind: 'released' });
-  store.addTimeline(b.id, `Hold released: ${reason}.`);
-  store.logActivity(`Released ${b.customerName}'s unpaid hold on ${b.slotLabel}.`, { bookingId: b.id, kind: 'release' });
+  // A split deposit with one share paid: that share is released (a hold is voided) or refunded (captured money).
+  // The booking is closed, so nobody keeps money for a time that was never confirmed.
+  const t = totals(store.getBooking(b.id));
+  let back = null;
+  if (t.paid > 0 || t.tips > 0) back = await refund(b.id, { reason: `Hold released: ${reason}`, newStatus: 'canceled', notify: false });
+  const money = !back ? '' : back.released ? ` The ${usd(back.refunded)} that was paid toward it is released from your PayPal; you were never charged.` : ` The ${usd(back.refunded)} that was paid toward it is refunded (reference ${back.reference}).`;
+  store.addMessage(b.leadId, 'assistant', `We released the hold on ${b.slotLabel} since the ${back ? 'rest of the ' : ''}deposit didn't come through.${money} Text us anytime and we'll find you a new time.`, { kind: 'released' });
+  store.addTimeline(b.id, `Hold released: ${reason}.${back ? ` ${usd(back.refunded)} paid toward the deposit went back (${back.reference}).` : ''}`);
+  store.logActivity(`Released ${b.customerName}'s unpaid hold on ${b.slotLabel}.${back ? ` The ${usd(back.refunded)} share that was paid went back (${back.reference}).` : ''}`, { bookingId: b.id, kind: 'release' });
   await offerToWaitlist(b.presetId, b.slotStart, b.slotLabel);
   return store.getBooking(b.id);
 }

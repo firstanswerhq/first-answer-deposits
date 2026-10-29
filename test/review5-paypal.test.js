@@ -198,3 +198,41 @@ test('cancel of a replaced invoice is retried until PayPal confirms; a reschedul
   assert.ok(calls.some((x) => x.path === `/v2/invoicing/invoices/${inv2}/cancel`));
   assert.match(store.getLead(nc.leadId).messages.at(-1).text, /invoice had the old time/);
 });
+
+// ---------- 5. split deposit, one share paid, the rest never comes ----------
+test('a stale split hold with one share paid voids that share in PayPal and tells the customer', async () => {
+  const b = await agentBooking('StaleSplit');
+  await B.splitDue(b.id, 2);
+  const shares = store.getBooking(b.id).payments.filter((p) => p.status === 'pending');
+  await pay(shares[0].id);
+  const auth = store.findPayment(shares[0].id).payment.hold.authorizationId;
+  store.updateBooking(b.id, { createdAt: new Date(Date.now() - 3 * 3600e3).toISOString() });
+  await B.releaseStaleHolds();
+  const nb = store.getBooking(b.id);
+  assert.equal(nb.status, 'canceled');
+  assert.equal(nb.payments.find((p) => p.id === shares[0].id).hold.status, 'voided');
+  assert.ok(calls.some((c) => c.path === `/v2/payments/authorizations/${auth}/void`), 'PayPal void called');
+  assert.equal(B.totals(nb).paid, 0);
+  assert.match(store.getLead(nb.leadId).messages.at(-1).text, /released from your PayPal/);
+});
+
+test('a captured share is refunded when the owner releases the hold; an ending honor period on a held split releases it', async () => {
+  const b = await agentBooking('CapturedShare', { hold: false });
+  await B.splitDue(b.id, 2);
+  const share = store.getBooking(b.id).payments.find((p) => p.status === 'pending');
+  await pay(share.id);
+  const cap = store.findPayment(share.id).payment.captureId;
+  await B.releaseHold(b.id, 'Released by the owner');
+  assert.equal(refundsOf(cap).length, 1, 'PayPal refund of the captured share');
+  assert.equal(B.totals(store.getBooking(b.id)).paid, 0);
+
+  const c = await agentBooking('EndingSplit');
+  await B.splitDue(c.id, 2);
+  const s1 = store.getBooking(c.id).payments.find((p) => p.status === 'pending');
+  await pay(s1.id);
+  const n = await B.settleExpiringHolds(Date.now() + 70 * 3600e3);
+  assert.equal(n, 1);
+  const nc = store.getBooking(c.id);
+  assert.equal(nc.status, 'canceled');
+  assert.equal(nc.payments.find((p) => p.id === s1.id).hold.status, 'voided');
+});
