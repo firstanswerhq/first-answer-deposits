@@ -119,7 +119,8 @@ function publicBooking(b) {
     freeCancelUntil: B.freeCancelLabel(b),
     changes: b.changes,
     payments: b.payments.map((p) => ({ id: p.id, label: p.label, kind: p.kind, amount: p.amount, tip: p.tip || 0, status: p.status, via: p.via || p.mode || null, refund: p.refund || null, at: p.completedAt || p.createdAt })),
-    timeline: b.timeline,
+    // Customer-visible: never a PayPal vault id (older records named it in the timeline).
+    timeline: b.timeline.map((t) => ({ ...t, text: String(t.text).replace(/\s*\(vault [^)]*\)/gi, '').replace(/\b(?:DEMO-)?VAULT-[A-Za-z0-9-]+/g, 'saved wallet') })),
   };
 }
 

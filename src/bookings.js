@@ -661,7 +661,7 @@ export function grantMandate(bookingId, m) {
   const mandate = { limit: m.limit, spent: 0, vaultId: m.vaultId || null, customerId: m.customerId || null, status: m.status || 'active', scope: 'This booking only: the final balance and tip.', grantedAt: new Date().toISOString(), ...(m.demo ? { demo: true } : {}) };
   store.updateBooking(b.id, { mandate });
   if (mandate.status === 'active') {
-    store.addTimeline(b.id, `${b.customerName} let ${b.bookedBy || 'their AI assistant'} pay this booking's final bill and tip without asking again, up to ${usd(mandate.limit)}. PayPal saved their wallet with consent (vault ${mandate.vaultId}${mandate.demo ? ', demo' : ''}).`);
+    store.addTimeline(b.id, `${b.customerName} let ${b.bookedBy || 'their AI assistant'} pay this booking's final bill and tip without asking again, up to ${usd(mandate.limit)}. PayPal wallet saved for this booking with their consent${mandate.demo ? ' (demo)' : ''}.`);
     store.logActivity(`${b.customerName} pre-approved ${b.bookedBy || 'their assistant'} to pay up to ${usd(mandate.limit)} on this booking.`, { bookingId: b.id, kind: 'mandate' });
   } else {
     store.addTimeline(b.id, `${b.customerName} asked to let their assistant pay up to ${usd(mandate.limit)}, but PayPal did not save the wallet (${m.vaultStatus || 'no vault id'}), so the final bill will need their approval.`);

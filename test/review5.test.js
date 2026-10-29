@@ -225,3 +225,18 @@ test('demo server: the payout is labeled simulated, never "on its way"', async (
   assert.match(nb.timeline.find((t) => /payout/i.test(t.text)).text, /Simulated payout .*No money moved/);
   assert.ok(!store.listActivity().some((a) => a.bookingId === sarah.id && /on its way/.test(a.text)));
 });
+
+// ---------- 11. no vault id on customer pages ----------
+test('the pay page and booking page never show the PayPal vault id', async () => {
+  store.resetAll();
+  const b = await agentPaid('Vaulty', 200);
+  assert.ok(store.getBooking(b.id).mandate.vaultId);
+  const pay = await call('GET', `/api/pay/${b.payments[0].id}`);
+  const page = await call('GET', `/api/booking/${b.id}?k=${B.viewKeyOf(b)}`);
+  for (const r of [pay, page]) {
+    const s = JSON.stringify(r.data);
+    assert.ok(!s.includes(store.getBooking(b.id).mandate.vaultId), 'no vault id');
+    assert.doesNotMatch(s, /VAULT-/);
+  }
+  assert.match(JSON.stringify(pay.data), /PayPal wallet saved for this booking/);
+});
