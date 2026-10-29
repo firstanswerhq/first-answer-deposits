@@ -236,3 +236,23 @@ test('a captured share is refunded when the owner releases the hold; an ending h
   assert.equal(nc.status, 'canceled');
   assert.equal(nc.payments.find((p) => p.id === s1.id).hold.status, 'voided');
 });
+
+// ---------- 8. a reset never deletes a booking with an open PayPal object ----------
+test('Reset demo keeps bookings with a sent invoice or an open PayPal order, even ones this visitor made', async () => {
+  const { resetBusinessDemo } = await import('../src/seed.js');
+  const vid = 'cccccccccccccccccccccccc';
+  const mk = async (name) => {
+    const b = await agentBooking(name);
+    store.updateBooking(b.id, { visitorId: vid });
+    return b;
+  };
+  const invoiced = await mk('Invoiced');
+  await B.emailDepositInvoice(invoiced.id, { email: 'i@example.com' });
+  const ordered = await mk('Ordered');
+  await B.checkoutFor(ordered.payments[0].id, {});
+  const plain = await mk('Plain');
+  await resetBusinessDemo(biz, { visitorId: vid });
+  assert.ok(store.getBooking(invoiced.id), 'sent-but-unpaid invoice: kept');
+  assert.ok(store.getBooking(ordered.id), 'open PayPal order: kept');
+  assert.ok(!store.getBooking(plain.id), 'nothing open in PayPal: cleared');
+});

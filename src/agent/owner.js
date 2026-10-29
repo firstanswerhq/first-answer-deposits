@@ -199,9 +199,10 @@ function ownerTools(business) {
   };
 }
 
-export async function ownerCommand(text) {
+export async function ownerCommand(text, { visitorId = null } = {}) {
   const business = B.currentBusiness();
-  store.addOwnerMessage('owner', text, { presetId: business.id });
+  const tag = { presetId: business.id, ...(visitorId ? { visitorId } : {}) };
+  store.addOwnerMessage('owner', text, tag);
   const m = getModel();
   let reply;
   if (!m) {
@@ -233,6 +234,6 @@ export async function ownerCommand(text) {
       reply = await scriptedOwnerReply(text);
     }
   }
-  store.addOwnerMessage('assistant', reply, { presetId: business.id });
+  store.addOwnerMessage('assistant', reply, tag);
   return reply;
 }

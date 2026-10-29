@@ -269,21 +269,27 @@ export function listActivity() {
 }
 
 // ---------- one business's demo data ----------
-// Clears everything tied to one business (bookings, leads, waitlist, activity, owner chat), except bookings
-// the keep() test says to leave alone (real PayPal money). Other businesses are never touched.
-export function clearBusinessData(presetId, keep = () => false) {
-  const kept = new Set(db.bookings.filter((b) => b.presetId === presetId && keep(b)).map((b) => b.id));
-  const keptLeads = new Set(db.bookings.filter((b) => kept.has(b.id)).map((b) => b.leadId));
-  const gone = new Set(db.bookings.filter((b) => b.presetId === presetId && !kept.has(b.id)).map((b) => b.id));
-  const goneLeads = new Set(db.leads.filter((l) => l.presetId === presetId && !keptLeads.has(l.id)).map((l) => l.id));
+// Clears the records of one business that removeBooking() picks (and their leads, waitlist entries and activity),
+// plus leads, owner chat and waitlist entries that removeLead()/removeOwnerMessage() pick. Other businesses, and
+// everything not picked, are never touched.
+export function clearBusinessData(presetId, { removeBooking = () => true, removeLead = () => true, removeOwnerMessage = () => true } = {}) {
+  const mine = db.bookings.filter((b) => b.presetId === presetId);
+  const gone = new Set(mine.filter((b) => removeBooking(b)).map((b) => b.id));
+  const keptLeads = new Set(db.bookings.filter((b) => !gone.has(b.id)).map((b) => b.leadId));
+  const goneLeads = new Set(
+    db.leads
+      .filter((l) => l.presetId === presetId && !keptLeads.has(l.id))
+      .filter((l) => mine.some((b) => gone.has(b.id) && b.leadId === l.id) || removeLead(l))
+      .map((l) => l.id),
+  );
   db.bookings = db.bookings.filter((b) => !gone.has(b.id));
   db.leads = db.leads.filter((l) => !goneLeads.has(l.id));
-  db.waitlist = db.waitlist.filter((w) => w.presetId !== presetId || keptLeads.has(w.leadId));
-  db.activity = db.activity.filter((a) => !(a.presetId === presetId || gone.has(a.bookingId) || goneLeads.has(a.leadId)));
-  db.ownerThread = db.ownerThread.filter((m) => m.presetId !== presetId);
+  db.waitlist = db.waitlist.filter((w) => !(w.presetId === presetId && goneLeads.has(w.leadId)));
+  db.activity = db.activity.filter((a) => !(gone.has(a.bookingId) || goneLeads.has(a.leadId) || (a.presetId === presetId && a.kind === 'seed')));
+  db.ownerThread = db.ownerThread.filter((m) => !(m.presetId === presetId && removeOwnerMessage(m)));
   if (db.ownerPending) delete db.ownerPending[presetId];
   changed('reset', { presetId });
-  return { bookings: gone.size, kept: kept.size };
+  return { bookings: gone.size, kept: mine.length - gone.size };
 }
 
 // ---------- demo reset ----------

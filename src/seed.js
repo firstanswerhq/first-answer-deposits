@@ -49,12 +49,34 @@ export async function seedSampleDay(business) {
   return { bookings: made.length };
 }
 
-// "Reset demo" on the owner page: this business's demo data is cleared and a fresh sample day is loaded.
-// Bookings holding real PayPal sandbox money (paid through PayPal, not fully refunded) are kept, so a reset
-// never strands money; other businesses are never touched.
-export async function resetBusinessDemo(business) {
-  const realMoney = (b) => b.payments.some((p) => (p.status === 'completed' || p.hold?.status === 'authorized') && !B.isDemoMoney(p) && p.mode === 'paypal' && !(p.refund && p.refund.amount + 0.001 >= p.amount));
-  const r = store.clearBusinessData(business.id, realMoney);
+// True while PayPal holds something open for this booking: an order not yet paid, an invoice still payable (or one
+// whose cancel PayPal has not confirmed), a hold, a saved wallet with an active limit, or captured money not fully
+// refunded. Such a booking is never deleted by a reset, so a reset never strands money or a live PayPal object.
+export function hasOpenPayPal(b) {
+  const real = (p) => !B.isDemoMoney(p) && p.mode === 'paypal';
+  const refundedAll = (p) => p.refund && p.refund.amount + 0.001 >= p.amount;
+  return (
+    b.payments.some(
+      (p) =>
+        (p.status === 'pending' && p.orderId && real(p)) ||
+        [p.invoice, ...(p.invoices || [])].some((i) => i && !i.demo && (i.status === 'sent' || (i.status === 'canceled' && i.cancelConfirmed === false))) ||
+        (p.hold?.status === 'authorized' && !p.hold.demo) ||
+        (p.status === 'completed' && real(p) && !refundedAll(p)),
+    ) ||
+    Boolean(b.mandate && b.mandate.status === 'active' && b.mandate.vaultId && !b.mandate.demo)
+  );
+}
+
+// "Reset demo" on the owner page: clears what this visitor made on this business (bookings, texts, owner chat) and
+// the sample day, then loads a fresh sample day. Demo businesses are shared, so other visitors' bookings are never
+// touched, and no booking with an open PayPal object is ever deleted.
+export async function resetBusinessDemo(business, { visitorId = null } = {}) {
+  const ours = (x) => Boolean(x.sample || (visitorId && x.visitorId === visitorId));
+  const r = store.clearBusinessData(business.id, {
+    removeBooking: (b) => ours(b) && !hasOpenPayPal(b),
+    removeLead: (l) => ours(l),
+    removeOwnerMessage: (m) => Boolean(visitorId && m.visitorId === visitorId),
+  });
   const seeded = await seedSampleDay(business);
   return { cleared: r.bookings, kept: r.kept, bookings: seeded.bookings };
 }

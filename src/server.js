@@ -358,7 +358,7 @@ app.get('/api/owner/state', ownerOnly, (req, res) => {
 app.post('/api/owner/text', ownerOnly, ownerOfCurrent, rateLimit(40, 10 * 60 * 1000), wrap(async (req, res) => {
   const text = cleanText(req.body.text);
   if (!text) return res.status(400).json({ error: 'Empty message' });
-  const reply = await ownerCommand(text);
+  const reply = await ownerCommand(text, { visitorId: req.visitorId || null });
   res.json({ reply });
 }));
 
@@ -397,7 +397,7 @@ app.post('/api/owner/preset', ownerOnly, (req, res) => {
 app.post('/api/owner/seed', ownerOnly, ownerOfCurrent, wrap(async (req, res) => res.json({ ok: true, ...(await seedSampleDay(B.currentBusiness())) })));
 // Clears only this business's demo data (and reloads its sample day). Demo businesses are open to try; a set-up
 // business only to its owner. Wiping every business at once stays behind resetAllowed() below.
-app.post('/api/owner/reset-business', ownerOnly, ownerOfCurrent, rateLimit(20, 10 * 60 * 1000), wrap(async (req, res) => res.json({ ok: true, ...(await resetBusinessDemo(B.currentBusiness())) })));
+app.post('/api/owner/reset-business', ownerOnly, ownerOfCurrent, rateLimit(20, 10 * 60 * 1000), wrap(async (req, res) => res.json({ ok: true, ...(await resetBusinessDemo(B.currentBusiness(), { visitorId: req.visitorId })) })));
 app.post('/api/owner/reset', ownerOnly, (req, res) => {
   // Anyone can open the hosted demo, so wiping everyone's demo data is off unless the host turns it on.
   if (!resetAllowed()) return res.status(403).json({ error: 'Starting over is turned off on this server. (The host can set ALLOW_RESET=1.)' });

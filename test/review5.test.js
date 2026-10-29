@@ -175,3 +175,26 @@ test('outside MCP callers keep the public limit (a fake internal header does not
   assert.doesNotMatch(friendlyError('Streamable HTTP error: Error POSTing to endpoint: {"jsonrpc":"2.0","error":{"code":-32000,"message":"Too many requests."},"id":null}'), /jsonrpc|\{/);
   assert.match(friendlyError('MCP error -32602: That time is no longer open. Offer other times.'), /no longer open/);
 });
+
+// ---------- 8. Reset demo clears only what this visitor made ----------
+test("Reset demo from one browser keeps another visitor's in-progress booking", async () => {
+  store.resetAll();
+  const A = 'fad_vid=aaaaaaaaaaaaaaaaaaaaaaaa';
+  const Bc = 'fad_vid=bbbbbbbbbbbbbbbbbbbbbbbb';
+  await call('POST', '/api/owner/seed', { biz: 'cleaning', cookie: A });
+  // Visitor B's assistant books (over MCP, on B's behalf); visitor B also texts the business.
+  const theirs = await call('POST', '/api/assistant', { body: { sessionId: sid(), text: CHIP, bizId: 'cleaning' }, cookie: Bc });
+  assert.ok(theirs.data.approval);
+  const lead = (await call('POST', '/api/text/start', { body: { presetId: 'cleaning' }, cookie: Bc })).data.leadId;
+  // Visitor A books too, then presses Reset demo.
+  const mine = await call('POST', '/api/assistant', { body: { sessionId: sid(), text: CHIP, bizId: 'cleaning' }, cookie: A });
+  assert.ok(mine.data.approval);
+  await call('POST', '/api/owner/text', { body: { text: 'who owes me?' }, biz: 'cleaning', cookie: A });
+  const r = await call('POST', '/api/owner/reset-business', { biz: 'cleaning', cookie: A });
+  assert.equal(r.status, 200);
+  assert.ok(store.getBooking(theirs.data.approval.bookingId), "the other visitor's booking survives");
+  assert.ok(store.getLead(lead), "the other visitor's text thread survives");
+  assert.ok(!store.getBooking(mine.data.approval.bookingId), "this visitor's booking is cleared");
+  assert.equal(store.listBookings().filter((b) => b.sample).length, 3, 'a fresh sample day');
+  assert.equal(store.listOwnerMessages('cleaning').filter((m) => m.visitorId === 'aaaaaaaaaaaaaaaaaaaaaaaa').length, 0);
+});

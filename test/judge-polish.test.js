@@ -218,10 +218,12 @@ test('"Load a sample day" twice never duplicates, and "Reset demo" clears only t
   // Another business's data and its owner chat survive a reset of this one.
   await call('POST', '/api/owner/seed', { biz: 'hvac' });
   await call('POST', '/api/owner/text', { biz: 'hvac', body: { text: 'who owes me?' } });
-  const extra = await assistant({ sessionId: 'reset-visitor', bizId: 'cleaning', text: HEADLINE });
+  // The same browser (visitor cookie) books with the assistant, then resets: its booking goes.
+  const me = { cookie: 'fad_vid=0123456789abcdef01234567' };
+  const extra = (await call('POST', '/api/assistant', { body: { sessionId: 'reset-visitor', bizId: 'cleaning', text: HEADLINE }, headers: me })).data;
   assert.ok(extra.approval);
   const hvacBefore = (await call('GET', '/api/owner/state', { biz: 'hvac' })).data;
-  const reset = await call('POST', '/api/owner/reset-business', { biz: 'cleaning' });
+  const reset = await call('POST', '/api/owner/reset-business', { biz: 'cleaning', headers: me });
   assert.equal(reset.status, 200);
   assert.equal(reset.data.bookings, 3, 'a fresh sample day is loaded');
   const clean = (await call('GET', '/api/owner/state', { biz: 'cleaning' })).data;
