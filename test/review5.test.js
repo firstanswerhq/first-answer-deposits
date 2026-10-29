@@ -198,3 +198,17 @@ test("Reset demo from one browser keeps another visitor's in-progress booking", 
   assert.equal(store.listBookings().filter((b) => b.sample).length, 3, 'a fresh sample day');
   assert.equal(store.listOwnerMessages('cleaning').filter((m) => m.visitorId === 'aaaaaaaaaaaaaaaaaaaaaaaa').length, 0);
 });
+
+// ---------- 9. test disputes only on captured money ----------
+test('"Test a dispute" is refused on an uncaptured hold and works on captured money', async () => {
+  store.resetAll();
+  const held = await agentPaid('Holdy', 0);
+  assert.ok(B.totals(held).onHold > 0, 'deposit is a hold');
+  const r1 = await call('POST', `/api/owner/bookings/${held.id}/demo-dispute`, { biz: 'cleaning' });
+  assert.equal(r1.status, 400);
+  assert.match(r1.data.error, /hold/);
+  await B.markCompleted(held.id); // captures the hold
+  const r2 = await call('POST', `/api/owner/bookings/${held.id}/demo-dispute`, { biz: 'cleaning' });
+  assert.equal(r2.status, 200);
+  assert.equal(store.getBooking(held.id).disputes[0].amount, B.totals(store.getBooking(held.id)).paid);
+});

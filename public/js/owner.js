@@ -72,6 +72,8 @@ function kpis(s) {
 const CLOSED = ['canceled', 'refunded', 'no_show'];
 // A refund only makes sense when money (or a tip) is still in: no Refund button on a $0 booking.
 const refundable = (b) => b.totals.paid > 0 || b.totals.tips > 0;
+// A dispute is only possible on money that was captured; a deposit still on hold was never charged.
+const disputable = (b) => b.totals.paid - (b.totals.onHold || 0) > 0.001;
 
 function bookings(list) {
   if (!list.length) {
@@ -82,7 +84,7 @@ function bookings(list) {
     '<tr><th>Customer</th><th>Appointment</th><th>Status</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Owed</th><th></th></tr>' +
     list
       .map((b) => {
-        const demoDispute = lastState?.health.paypal === 'demo mode' && refundable(b) && !(b.disputes || []).length ? [['demo-dispute', 'Test a dispute']] : [];
+        const demoDispute = lastState?.health.paypal === 'demo mode' && disputable(b) && !(b.disputes || []).length ? [['demo-dispute', 'Test a dispute']] : [];
         const acts = [...(ACTIONS[b.status] || []), ...demoDispute].filter(([a]) => a !== 'refund' || refundable(b)).map(([a, label]) => `<button class="btn secondary small" data-act="${a}" data-id="${b.id}">${label}</button>`).join('');
         const limit = b.assistantLimit && ['active', 'used'].includes(b.assistantLimit.status) ? `<div class="small" style="color:#1f7a45">${escapeHtml(b.bookedBy || 'Assistant')} may pay up to ${money(b.assistantLimit.limit)}${b.assistantLimit.spent ? ` (${money(b.assistantLimit.spent)} paid)` : ''}</div>` : '';
         const dispute = (b.disputes || []).length ? `<div class="small" style="color:#9a5b00">Dispute: ${escapeHtml(b.disputes.at(-1).status.replace(/_/g, ' '))}</div>` : '';

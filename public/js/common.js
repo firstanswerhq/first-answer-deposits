@@ -76,7 +76,9 @@ export function ask({ title, text = '', input = null, ok = 'OK', cancel = 'Cance
 }
 
 // Small message that fades away (used instead of alert()).
+// One at a time: a new message replaces the one on screen, so two never stack on top of each other.
 export function toast(text, kind = '') {
+  document.querySelectorAll('.toast').forEach((t) => t.remove());
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   el.textContent = text;

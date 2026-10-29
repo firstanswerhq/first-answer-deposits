@@ -381,8 +381,11 @@ app.post('/api/owner/bookings/:id/cash', ownerOnly, ownerOfBooking, ownerAction(
 app.post('/api/owner/bookings/:id/demo-dispute', ownerOnly, ownerOfBooking, ownerAction(async (req) => {
   if (paypalReady) throw new Error('This server has PayPal keys: real disputes come in from PayPal, so there is no practice dispute here.');
   const b = store.getBooking(req.params.id);
-  if (!(B.totals(b).paid > 0)) throw new Error(`${b.customerName} hasn't paid anything, so there is nothing to dispute.`);
-  return B.defendDispute(b.id, { disputeId: `DEMO-DISPUTE-${b.id.slice(-5).toUpperCase()}`, reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: B.totals(b).paid, demo: true });
+  // Disputes happen on captured money only: a deposit still on hold was never charged.
+  const t = B.totals(b);
+  const captured = Math.round((t.paid - t.onHold) * 100) / 100;
+  if (!(captured > 0)) throw new Error(t.onHold > 0 ? `${b.customerName}'s deposit is a hold on their PayPal, not a charge, so there is nothing to dispute yet.` : `${b.customerName} hasn't paid anything, so there is nothing to dispute.`);
+  return B.defendDispute(b.id, { disputeId: `DEMO-DISPUTE-${b.id.slice(-5).toUpperCase()}`, reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED', amount: captured, demo: true });
 }));
 app.post('/api/owner/rebook', ownerOnly, ownerOfCurrent, ownerAction(() => B.sendRebookNudges({ force: true, presetId: B.currentBusiness().id })));
 
