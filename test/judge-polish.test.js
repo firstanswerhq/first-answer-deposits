@@ -51,11 +51,15 @@ test('the headline chip still gets an approval card after other visitors took Fr
     assert.doesNotMatch(r.reply, /Which one\?/);
   }
   assert.match(runs[0].reply, /^Done\. I held/);
-  assert.match(runs[1].reply, /Friday in the morning was taken, so I held the closest open time instead/);
+  assert.match(runs[1].reply, /^(Friday morning was taken|This Friday is fully booked), so I held the closest open time instead/);
   const starts = runs.map((r) => store.getBooking(r.approval.bookingId).slotStart);
   assert.equal(new Set(starts).size, 4, 'four different times');
   // The second run stays on Friday (the nearest open time that day).
   assert.match(store.getBooking(runs[1].approval.bookingId).slotLabel, /^Fri/);
+  // Once that Friday is full, the reply says so instead of quietly jumping a week.
+  const firstDay = store.getBooking(runs[0].approval.bookingId).slotLabel.split(',').slice(0, 2).join(',');
+  const fourth = store.getBooking(runs[3].approval.bookingId).slotLabel;
+  if (!fourth.startsWith(firstDay)) assert.match(runs[3].reply, /^This Friday is fully booked, so I held the closest open time instead/);
 });
 
 // ---------- 3. the scripted front desk (no AI key) ----------

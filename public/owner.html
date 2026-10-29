@@ -10,7 +10,7 @@
   <style>
     .owner { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 24px; max-width: 1280px; margin: 0 auto; padding: 24px 16px 48px; }
     @media (max-width: 1000px) { .owner { grid-template-columns: minmax(0, 1fr); padding: 16px 12px; } .phone { max-width: 100%; } }
-    @media (max-width: 600px) { .phone-hide { display: none !important; } select.biz { order: -1; flex: 1 1 100%; max-width: none; } .owner .phone { height: 600px; } }
+    @media (max-width: 600px) { .phone-hide { display: none !important; } .topbar { flex-wrap: wrap; row-gap: 10px; } .topbar .right { flex: 1 1 100%; min-width: 0; } select.biz { order: -1; flex: 1 1 100%; width: 100%; max-width: 100%; min-width: 0; } .owner .phone { height: 600px; } }
     .owner .phone { height: 720px; }
     .phone-chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; background: #fafbfd; border-top: 1px solid var(--line); }
     .phone-chips .chip { white-space: nowrap; font-size: 12px; padding: 6px 10px; }

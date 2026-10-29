@@ -170,6 +170,24 @@ const inPart = (slot, when) => {
   return h >= 17;
 };
 const partWords = (when) => (when?.hour !== undefined ? `at ${((when.hour + 11) % 12) + 1}` : when?.part ? `in the ${when.part}` : '');
+// "Friday morning", "Friday at 9", "Tomorrow afternoon".
+const askedPhrase = (day, when) => {
+  const d = dayWords(day);
+  const w = when?.hour !== undefined ? `at ${((when.hour + 11) % 12) + 1}` : when?.part || '';
+  const out = [d, w].filter(Boolean).join(' ');
+  return out ? out[0].toUpperCase() + out.slice(1) : '';
+};
+// The label prefix ("Fri, Oct 30") of the nearest coming day with that weekday name, in the business's time zone.
+function nearestDayPrefix(day, timeZone) {
+  if (!day || !Object.values(DAYS).includes(day) || !timeZone) return null;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(Date.now() + i * 86400000);
+    if (new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'long' }).format(d).toLowerCase() === day) {
+      return new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short', month: 'short', day: 'numeric' }).format(d);
+    }
+  }
+  return null;
+}
 const dayWords = (day) => (day && day !== 'any' ? (day === 'weekend' ? 'this weekend' : day[0].toUpperCase() + day.slice(1)) : '');
 
 // "Friday morning" means the nearest Friday. When that exact time is open it is the slot. When it is not (on a shared
@@ -382,13 +400,16 @@ async function scriptedTurn(s, text, url, trace) {
     s.facts = { name: f.name, phone: f.phone };
     s.booking = { id: r.booking_id, key: r.booking_key, slotStart: r.slot_start, approvalUrl: r.approval_url, amount: r.approval_amount };
     if (!r.human_approval_required) return { reply: `Booked: ${what} with ${biz.name} on ${r.appointment}. No deposit needed, so you're confirmed.`, approval: null };
-    const asked = [dayWords(f.day), partWords(f.when)].filter(Boolean).join(' ');
+    // Say plainly when the time held is not the one asked for: the nearest weekday was full, or that time was taken.
+    const nearest = nearestDayPrefix(f.day, biz.timezone);
+    const dayFull = nearest && !String(r.appointment).startsWith(nearest);
+    const asked = askedPhrase(f.day, f.when);
     const reply = [
-      swapped ? `${asked ? `${asked[0].toUpperCase()}${asked.slice(1)} was taken` : 'That time was taken'}, so I held the closest open time instead.` : '',
+      dayFull ? `This ${dayWords(f.day)} is fully booked, so I held the closest open time instead.` : swapped ? `${asked ? `${asked} was taken` : 'That time was taken'}, so I held the closest open time instead.` : '',
       `Done. I held ${what} with ${biz.name} for ${r.appointment}.`,
       `Total ${usd(r.total)}: a ${usd(r.deposit)} deposit now and ${usd(r.total - r.deposit)} after the job.`,
       `I can't pay the deposit for you. Approve the ${usd(r.deposit)} in PayPal (card, Venmo or Pay Later work too) and the time is yours. Free to cancel or move until ${r.free_cancel_until}.`,
-      swapped ? 'Want a different time? Say "move it to" and the day.' : '',
+      swapped || dayFull ? 'Want a different time? Say "move it to" and the day.' : '',
     ].filter(Boolean).join(' ');
     return { reply, approval: { url: r.approval_url, amount: r.approval_amount, bookingId: r.booking_id } };
   } finally {
