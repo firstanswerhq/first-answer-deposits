@@ -14,6 +14,9 @@ const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const sum = (arr) => round2(arr.reduce((a, b) => a + Number(b || 0), 0));
 export const usd = (n) => `$${Number(n).toFixed(Number(n) % 1 ? 2 : 0)}`;
 
+// A canceled, refunded or no-show booking is closed: its links take no money and nothing is owed on it.
+const CLOSED = ['canceled', 'refunded', 'no_show'];
+
 export const STATUS_WORDS = {
   held: 'Held, waiting on the deposit',
   confirmed: 'Confirmed',
@@ -185,9 +188,10 @@ export function tipFor(payment, v) {
 
 // Why a payment link can't take money right now, in plain words, or null when it can.
 // A canceled or refunded booking is closed: its links are dead even if one is somehow still marked pending.
-const CLOSED = ['canceled', 'refunded', 'no_show'];
 export function notPayable(booking, payment) {
   if (CLOSED.includes(booking?.status)) return `This booking was ${(STATUS_WORDS[booking.status] || booking.status).toLowerCase()}, so there's nothing to pay. Text us anytime to book a new time.`;
+  // The business canceled this time: no deposit is taken until the customer picks a new one.
+  if (booking?.status === 'needs_rebook' && payment?.kind === 'deposit' && payment.status !== 'completed') return "The business canceled this time, so there's no deposit to pay. Pick a new time in your texts and we'll send a fresh link.";
   if (payment?.status === 'void') return 'This link was replaced or turned off, so nothing is owed on it. Check your texts for the latest link.';
   if (payment && payment.status !== 'pending' && payment.status !== 'completed') return 'This link can no longer take a payment.';
   return null;
@@ -460,20 +464,44 @@ export async function customerCancel(bookingId, { notify = true } = {}) {
 export async function businessCancel(bookingId, reason = '') {
   const b = store.getBooking(bookingId);
   if (!b) throw new Error('Booking not found.');
+  // Only an upcoming booking can be canceled this way. A finished, paid-up or already-closed job never reopens.
+  if (!['held', 'confirmed'].includes(b.status)) throw new Error(`${b.customerName}'s booking is ${(STATUS_WORDS[b.status] || b.status).toLowerCase()}, so there's no upcoming appointment to cancel.`);
   const business = businessOf(b);
   const options = availableSlots(business, { limit: 3 }).filter((s) => s.start !== b.slotStart);
   store.updateBooking(b.id, { status: 'needs_rebook', businessCanceledAt: new Date().toISOString(), businessCancelReason: reason });
   const paid = totals(b).paid;
+  // Nothing paid yet: turn the deposit link off, so nobody pays for a time we canceled. Picking a new time sends a fresh one.
+  if (paid <= 0) b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
   const list = options.map((s, i) => `${i + 1}) ${s.label}`).join('  ');
   store.addMessage(
     b.leadId,
     'assistant',
-    `We're so sorry, we have to cancel ${b.slotLabel}${reason ? ` (${reason})` : ''}. Pick a new time and your ${usd(paid)} carries over: ${list}. Or reply REFUND and we'll send it all back right now.`,
+    paid > 0
+      ? `We're so sorry, we have to cancel ${b.slotLabel}${reason ? ` (${reason})` : ''}. Pick a new time and your ${usd(paid)} carries over: ${list}. Or reply REFUND and we'll send it all back right now.`
+      : `We're so sorry, we have to cancel ${b.slotLabel}${reason ? ` (${reason})` : ''}. Nothing was charged, and the deposit link is turned off. Pick a new time and we'll send a fresh one: ${list}. Or reply CANCEL and we'll close it out.`,
     { kind: 'business_cancel', options },
   );
-  store.addTimeline(b.id, `Business canceled ${b.slotLabel}${reason ? ` (${reason})` : ''}. Offered new times or a full refund.`);
+  store.addTimeline(b.id, `Business canceled ${b.slotLabel}${reason ? ` (${reason})` : ''}. ${paid > 0 ? 'Offered new times or a full refund.' : 'Nothing was paid; deposit link turned off. Offered new times.'}`);
   store.logActivity(`You canceled ${b.customerName}'s ${b.slotLabel}. They're choosing a new time or a refund.`, { bookingId: b.id, kind: 'business_cancel' });
   return { booking: store.getBooking(b.id), options };
+}
+
+// The customer takes the out after the business canceled: everything they paid comes back (tips too), and if
+// nothing was paid the booking is simply closed. Never a cancel fee.
+export async function acceptBusinessCancel(bookingId, { notify = true } = {}) {
+  const b = store.getBooking(bookingId);
+  if (!b) throw new Error('Booking not found.');
+  if (b.status !== 'needs_rebook') throw new Error(`${b.customerName}'s booking is ${(STATUS_WORDS[b.status] || b.status).toLowerCase()}, not one the business canceled.`);
+  const t = totals(b);
+  if (t.paid > 0 || t.tips > 0) {
+    const r = await refund(b.id, { reason: 'Business canceled; customer chose a refund', notify });
+    return { outcome: 'refunded_in_full', ...r };
+  }
+  store.updateBooking(b.id, { status: 'canceled', canceledAt: new Date().toISOString(), cancelReason: 'Business canceled; customer chose not to rebook' });
+  b.payments.filter((p) => p.status === 'pending').forEach((p) => store.updatePayment(p.id, { status: 'void' }));
+  store.addTimeline(b.id, 'Customer chose not to rebook after the business canceled. Nothing was paid, so nothing to refund. Booking closed.');
+  store.logActivity(`${b.customerName} closed out the time you canceled (nothing was paid).`, { bookingId: b.id, kind: 'cancel' });
+  return { outcome: 'released', refunded: 0, reference: null, booking: store.getBooking(b.id) };
 }
 
 export async function releaseHold(bookingId, reason = 'Deposit not paid in time') {
@@ -523,10 +551,17 @@ export async function reschedule(bookingId, newSlotStart, { notify = true } = {}
     status: nextStatus,
     rescheduledFrom: old.label,
   });
-  const nb = store.getBooking(b.id);
+  let nb = store.getBooking(b.id);
+  // Back to a held booking whose deposit link was turned off (the business canceled before it was paid): send a fresh one.
+  let freshLink = null;
+  if (nextStatus === 'held' && !nb.payments.some((p) => p.kind === 'deposit' && p.status === 'pending')) {
+    const owed = round2(nb.deposit - totals(nb).depositPaid);
+    if (owed > 0) freshLink = payPageUrl(await newPayment(nb, { kind: 'deposit', amount: owed, label: 'Deposit' }));
+    nb = store.getBooking(b.id);
+  }
   const paid = totals(nb).paid;
-  store.addTimeline(b.id, `Moved from ${old.label} to ${label}. ${usd(paid)} already paid carried over; no new charge.`);
-  if (notify) store.addMessage(nb.leadId, 'assistant', `Done! You're moved to ${label}.${paid > 0 ? ` Your ${usd(paid)} moved with you, nothing new to pay.` : ''} Free to cancel or move until ${freeCancelLabel(nb)}.`, { kind: 'rescheduled' });
+  store.addTimeline(b.id, `Moved from ${old.label} to ${label}. ${usd(paid)} already paid carried over; no new charge.${freshLink ? ' Sent a fresh deposit link.' : ''}`);
+  if (notify) store.addMessage(nb.leadId, 'assistant', `Done! You're moved to ${label}.${paid > 0 ? ` Your ${usd(paid)} moved with you, nothing new to pay.` : ''}${freshLink ? ` Tap to pay the deposit and lock it in: ${freshLink}` : ''} Free to cancel or move until ${freeCancelLabel(nb)}.`, { kind: 'rescheduled' });
   store.logActivity(`${nb.customerName} moved from ${old.label} to ${label}${paid > 0 ? `; ${usd(paid)} carried over` : ''}.`, { bookingId: b.id, kind: 'reschedule' });
   await offerToWaitlist(b.presetId, old.start, old.label);
   return nb;

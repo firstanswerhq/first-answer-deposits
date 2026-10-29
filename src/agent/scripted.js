@@ -90,7 +90,8 @@ export async function scriptedCustomerReply(lead) {
     }
     // We canceled on our side: "refund" or "cancel" both mean "send my money back" (never a cancel fee).
     if (booking.status === 'needs_rebook' && (/refund/.test(t) || (/cancel/.test(t) && !isQuestion))) {
-      const r = await B.refund(booking.id, { reason: 'Business canceled; customer chose a refund' });
+      const r = await B.acceptBusinessCancel(booking.id);
+      if (r.outcome === 'released') return "All canceled. Nothing was charged, so there's nothing to refund. Text us anytime to book again.";
       return `Done. ${B.usd(r.refunded)} is on its way back to you.`;
     }
     if (isQuestion && /(refund|cancel|money back)/.test(t)) return policyAnswer(booking);
@@ -195,7 +196,7 @@ export async function scriptedOwnerReply(text) {
     let b = byName(/refund\s+(\w+)/);
     if (b) {
       const r = await B.refund(b.id, { reason: 'Owner request' });
-      return `Refunded ${B.usd(r.refunded)} to ${b.customerName}. Reference ${r.reference}.`;
+      return `Refunded ${B.usd(r.refunded)} to ${b.customerName}${r.tipRefunded ? ` (including the ${B.usd(r.tipRefunded)} tip)` : ''}. Reference ${r.reference}.`;
     }
     const cash = t.match(/(\w+)\s+paid\s+\$?(\d+(?:\.\d+)?)\s*(cash|check)?/);
     if (cash) {

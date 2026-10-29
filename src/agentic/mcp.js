@@ -299,9 +299,11 @@ export function buildServer(business, { base = config.publicUrl } = {}) {
     },
     async ({ booking_id, booking_key }) => {
       const b = requireBooking(business, booking_id, booking_key);
-      // The business already canceled this time: canceling now means the customer takes the full refund.
+      // The business already canceled this time: canceling now means the customer takes the full refund
+      // (or, if nothing was paid, the booking is simply closed).
       if (b.status === 'needs_rebook') {
-        const rf = await B.refund(b.id, { reason: 'Business canceled; customer chose a refund', notify: true });
+        const rf = await B.acceptBusinessCancel(b.id, { notify: true });
+        if (rf.outcome === 'released') return ok({ canceled: true, outcome: 'released', refunded: 0, kept: 0, ...bookingView(rf.booking), message: 'Canceled. Nothing was paid, so nothing is owed or refunded.' });
         return ok({ canceled: true, outcome: 'refunded_in_full', refunded: rf.refunded, kept: 0, ...bookingView(rf.booking), message: `Canceled and ${B.usd(rf.refunded)} refunded in full through PayPal (reference ${rf.reference}), since the business canceled this time.` });
       }
       const r = await B.customerCancel(b.id, { notify: true });

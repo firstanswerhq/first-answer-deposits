@@ -168,7 +168,8 @@ function customerTools(lead, business, state) {
         const b = getBooking();
         if (!b) return { error: 'No booking to cancel.' };
         if (b.status === 'needs_rebook') {
-          const r = await B.refund(b.id, { reason: 'Business canceled; customer chose a refund', notify: false });
+          const r = await B.acceptBusinessCancel(b.id, { notify: false });
+          if (r.outcome === 'released') return { outcome: 'released', refunded: 0, note: 'Nothing was paid, so the booking is closed and nothing is owed.' };
           return { outcome: 'refunded_in_full', amount: r.refunded, reference: r.reference, timing: 'Shows in PayPal right away; card refunds can take a few business days at the bank.' };
         }
         const r = await B.customerCancel(b.id, { notify: false });
