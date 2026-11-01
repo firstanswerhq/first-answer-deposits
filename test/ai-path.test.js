@@ -12,6 +12,7 @@ process.env.PAYPAL_CLIENT_SECRET = '';
 process.env.GOOGLE_GENERATIVE_AI_API_KEY = '';
 process.env.ANTHROPIC_API_KEY = '';
 process.env.GROQ_API_KEY = '';
+process.env.FAD_NO_LISTEN = '1';
 
 const store = await import('../src/store.js');
 const B = await import('../src/bookings.js');
@@ -135,4 +136,51 @@ test("the customer's assistant names the model it really runs on", async () => {
   assert.equal(agentName(), 'Llama (on Groq)');
   _setModelForTests(null);
   assert.equal(agentName(), 'Demo assistant');
+});
+
+test("the customer's assistant on the model path records each MCP call as it happens, once, without booking_key", async () => {
+  store.resetAll();
+  const { default: app } = await import('../src/server.js');
+  const { getSession } = await import('../src/agentic/assistant.js');
+  const server = await new Promise((resolve) => {
+    const srv = app.listen(0, () => resolve(srv));
+  });
+  const base = `http://localhost:${server.address().port}`;
+  try {
+    let midTurn = null;
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        const results = toolResults(options.prompt);
+        const names = (options.tools || []).map((t) => t.name);
+        assert.ok(names.includes('book_appointment') && names.includes('pay_balance'), 'the MCP tools reach the model');
+        if (!results.length) return call('get_business_info', {});
+        if (results.length === 1) return call('check_availability', { count: 3 });
+        if (results.length === 2) {
+          // The session trace already holds the two calls made so far: the page polling it sees them live.
+          midTurn = getSession('model-1').trace.map((e) => e.tool);
+          const v = results[1].value;
+          const slots = (Array.isArray(v) ? JSON.parse(v.find((c) => c.type === 'text').text) : v.structuredContent || JSON.parse(v.content?.find((c) => c.type === 'text')?.text || '{}')).slots;
+          return call('book_appointment', { service: 'deep', size: '3 bedrooms', slot_start: slots[0].start, customer_name: 'Sarah', agent_name: 'mock' });
+        }
+        return text('Held. Approve the $50 deposit in PayPal.');
+      },
+    });
+    _setModelForTests({ model, name: 'mock', provider: 'anthropic' });
+    const res = await fetch(`${base}/api/assistant`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'model-1', bizId: 'cleaning', text: "Deep clean, 3 bedrooms, tomorrow morning. I'm Sarah." }) });
+    const r = await res.json();
+    assert.equal(r.mode, 'model');
+    assert.deepEqual(midTurn, ['get_business_info', 'check_availability']);
+    assert.deepEqual(r.trace.map((e) => e.tool), ['get_business_info', 'check_availability', 'book_appointment'], 'each call once');
+    assert.equal(r.traceTotal, 3);
+    assert.ok(r.approval?.url, 'the approval link comes from the book_appointment result');
+    const asJson = JSON.stringify(r.trace);
+    assert.ok(!asJson.includes('booking_key'), 'booking_key never leaves the server');
+    const get = await (await fetch(`${base}/api/assistant/model-1`)).json();
+    assert.equal(get.trace.length, 3);
+    assert.ok(!JSON.stringify(get.trace).includes('booking_key'));
+    assert.ok(getSession('model-1').booking?.key, 'the server itself keeps the key for follow-ups');
+  } finally {
+    _setModelForTests(null);
+    server.close();
+  }
 });

@@ -25,6 +25,12 @@ let watching = null;
 // How many of the session's trace entries are on screen: calls show up live while a turn runs (polled), and the
 // final reply fills in whatever is left.
 let traceShown = 0;
+// True only between a turn's start and its POST returning: a poll that resolves after that is thrown away, so the
+// final replay never shows a row twice.
+let polling = false;
+// Bumped by every turn and by start(): a reply or poll from an older turn (after "Start over" or a business switch)
+// is discarded instead of landing in the new thread.
+let turnSeq = 0;
 
 const mem = {
   get: (k) => {
@@ -45,7 +51,7 @@ const mem = {
     } catch {}
   },
 };
-const newId = () => 'as_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const newId = () => 'as_' + (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
 const clockNow = () => new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 
 // ---------- chat ----------
@@ -133,7 +139,7 @@ function watchPayment(card) {
       if (r.payment.status === 'completed') {
         clearInterval(watching);
         const held = r.payment.held === 'authorized';
-        const demo = r.paypal ? '' : ' (demo)'; // no PayPal keys on this server: the hold is simulated
+        const demo = (r.booking.holdDemo ?? !r.paypal) ? ' (demo)' : ''; // a simulated hold was never authorized in PayPal
         const limit = r.booking.assistantLimit;
         card.classList.add('paid');
         card.querySelector('.status').className = 'status confirmed';
@@ -234,8 +240,9 @@ function addSeparator(text) {
 }
 
 // Calls arrive together; show them one by one so the eye can follow the handshake.
-async function playTrace(trace) {
+async function playTrace(trace, myTurn = turnSeq) {
   for (const entry of trace) {
+    if (myTurn !== turnSeq) return;
     addCall(entry);
     traceShown++;
     await new Promise((r) => setTimeout(r, 420));
@@ -243,9 +250,10 @@ async function playTrace(trace) {
 }
 
 // While a turn runs, show the calls the assistant has made so far (the server records each one as it happens).
-async function pollTrace() {
+async function pollTrace(myTurn) {
   try {
     const r = await api(`/api/assistant/${sessionId}`);
+    if (!polling || myTurn !== turnSeq) return;
     for (const entry of r.trace.slice(traceShown)) {
       addCall(entry);
       traceShown++;
@@ -258,31 +266,41 @@ async function send(text) {
   text = text.trim();
   if (!text || busy) return;
   busy = true;
+  const myTurn = ++turnSeq;
   $('#live-dot').classList.add('busy');
   bubble('user', text);
   typing(true);
   addSeparator(`“${text.length > 48 ? text.slice(0, 46) + '…' : text}”`);
   const hint = setTimeout(typingHint, 5000);
-  const poll = setInterval(pollTrace, 2000);
+  polling = true;
+  const poll = setInterval(() => pollTrace(myTurn), 2000);
   const before = traceShown;
   try {
     const r = await api('/api/assistant', { method: 'POST', body: { sessionId, text, bizId } });
     clearInterval(poll);
+    clearTimeout(hint);
+    if (myTurn !== turnSeq) return; // the thread was restarted or switched while this turn ran
+    polling = false;
     // The turn's calls are the last r.trace.length in the session; some were already shown live.
     const total = r.traceTotal ?? before + (r.trace || []).length;
-    await playTrace((r.trace || []).slice(Math.max(0, traceShown - (total - (r.trace || []).length))));
+    await playTrace((r.trace || []).slice(Math.max(0, traceShown - (total - (r.trace || []).length))), myTurn);
+    if (myTurn !== turnSeq) return;
     traceShown = total;
     typing(false);
     bubble('assistant', r.reply);
     if (r.approval) approvalCard(r.approval);
   } catch (err) {
+    if (myTurn !== turnSeq) return;
     typing(false);
     bubble('assistant', err.message.includes('Too many') ? err.message : /too long|timed out/i.test(err.message) ? err.message : 'Something went wrong talking to the business. Try again.');
   } finally {
     clearTimeout(hint);
     clearInterval(poll);
-    busy = false;
-    $('#live-dot').classList.remove('busy');
+    if (myTurn === turnSeq) {
+      polling = false;
+      busy = false;
+      $('#live-dot').classList.remove('busy');
+    }
   }
 }
 
@@ -297,7 +315,10 @@ function renderPick() {
 }
 
 async function start(fresh = false) {
+  turnSeq++; // any turn still running belongs to the old thread and is dropped when it returns
+  polling = false;
   busy = false;
+  $('#live-dot').classList.remove('busy');
   if (watching) clearInterval(watching);
   $('#thread').innerHTML = '';
   traceShown = 0;

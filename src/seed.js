@@ -1,6 +1,7 @@
 // "Load a sample day": a few bookings in different states so the owner page tells the story at a glance.
 import * as store from './store.js';
 import * as B from './bookings.js';
+import { localDate } from './slots.js';
 
 // True when this business already has its sample day (one press is enough; a second never duplicates it).
 export function hasSampleDay(business) {
@@ -9,7 +10,9 @@ export function hasSampleDay(business) {
 
 export async function seedSampleDay(business) {
   if (hasSampleDay(business)) return { bookings: 0, already: true };
-  const slots = B.availableSlots(business, { limit: 12, days: 10 });
+  // Tomorrow stays open: the agent page's first chip asks for "tomorrow morning" and should get it on a fresh boot.
+  const tomorrow = localDate(new Date(Date.now() + 86400000), business.timezone);
+  const slots = B.availableSlots(business, { limit: 16, days: 10 }).filter((s) => localDate(new Date(s.start), business.timezone) !== tomorrow);
   if (slots.length < 4) throw new Error('Not enough open times to build a sample day.');
   const [svc1, svc2, svc3] = [business.services[0], business.services[1] || business.services[0], business.services[2] || business.services[0]];
   const sizeOf = (s, i) => Object.keys(s.sizes)[Math.min(i, Object.keys(s.sizes).length - 1)];

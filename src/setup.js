@@ -132,10 +132,15 @@ export function parseDeposit(text) {
 }
 
 // "Denver, CO, Mountain time" or "America/Denver" -> an IANA zone; anything else is Central (the default).
+// A zone word only counts when it is followed by "time" or ends the answer ("Mountain View, CA" is a city, not a zone),
+// and only the 3-letter EST/CST/MST/PST (any case) count as abbreviations ("Hartford, CT" keeps its state).
 const ZONE_WORDS = { eastern: 'America/New_York', central: 'America/Chicago', mountain: 'America/Denver', arizona: 'America/Phoenix', pacific: 'America/Los_Angeles', alaska: 'America/Anchorage', hawaii: 'Pacific/Honolulu' };
+const ZONE_WORD_RE = /\b(eastern|central|mountain|arizona|pacific|alaska|hawaii)\b(?:\s+(?:standard|daylight))?(?:\s+time(?:\s+zone)?|(?=\s*\)?\s*$))/i;
+const ZONE_ABBR_RE = /\b([ECMP])[SD]T\b/i;
+const IANA_RE = /\b([A-Z][A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\b/;
 export function parseTimezone(text) {
   const t = String(text || '');
-  const iana = t.match(/\b([A-Z][A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\b/);
+  const iana = t.match(IANA_RE);
   if (iana) {
     try {
       return new Intl.DateTimeFormat('en-US', { timeZone: iana[1] }).resolvedOptions().timeZone;
@@ -143,10 +148,23 @@ export function parseTimezone(text) {
       // not a real zone: fall through to the words
     }
   }
-  const word = Object.keys(ZONE_WORDS).find((w) => new RegExp(`\\b${w}\\b`, 'i').test(t));
-  if (word) return ZONE_WORDS[word];
-  const abbr = t.match(/\b(E|C|M|P)[SD]?T\b/);
-  return abbr ? { E: 'America/New_York', C: 'America/Chicago', M: 'America/Denver', P: 'America/Los_Angeles' }[abbr[1]] : 'America/Chicago';
+  const word = t.match(ZONE_WORD_RE);
+  if (word) return ZONE_WORDS[word[1].toLowerCase()];
+  const abbr = t.match(ZONE_ABBR_RE);
+  return abbr ? { E: 'America/New_York', C: 'America/Chicago', M: 'America/Denver', P: 'America/Los_Angeles' }[abbr[1].toUpperCase()] : 'America/Chicago';
+}
+
+// The zone comes off the city answer ("Denver, CO, Mountain time" -> "Denver, CO"), using the same patterns.
+function stripTimezone(t) {
+  let out = t;
+  for (const re of [IANA_RE, ZONE_WORD_RE, ZONE_ABBR_RE]) {
+    const m = out.match(re);
+    if (!m) continue;
+    const before = out.slice(0, m.index).replace(/[,;(]?\s*$/, '');
+    const after = out.slice(m.index + m[0].length).replace(/^\s*\)?/, '');
+    out = before + after;
+  }
+  return out.replace(/[,;\s]+$/, '');
 }
 
 export function parseEmail(text) {
@@ -166,7 +184,7 @@ export function applyAnswer(stepId, text, profile = {}) {
     case 'city': {
       const timezone = parseTimezone(t);
       // The zone words come off the city ("Denver, CO, Mountain time" -> "Denver, CO").
-      const city = cap(t.replace(/^(in|we're in|i'm in)\s+/i, '').replace(/[,;(]?\s*(?:\b(?:eastern|central|mountain|arizona|pacific|alaska|hawaii)\b(?:\s+time(?:\s+zone)?)?|\b[ECMP][SD]?T\b|[A-Z][A-Za-z_]+\/[A-Za-z_\/]+)\s*\)?/gi, '').replace(/[,;\s]+$/, ''));
+      const city = cap(stripTimezone(t.replace(/^(in|we're in|i'm in)\s+/i, '')));
       return { ok: true, patch: { city, timezone }, say: timezone === 'America/Chicago' ? undefined : `Got it, ${city}, on ${timezone.replace(/_/g, ' ')} time.` };
     }
     case 'hours': {

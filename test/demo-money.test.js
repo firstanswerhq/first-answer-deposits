@@ -44,6 +44,12 @@ test('sample day with PayPal keys set: refunds work locally and payouts skip dem
   assert.ok(!paid.payout, 'no payout is made from demo money');
 
   const confirmed = store.listBookings().find((b) => b.customerName === 'Marcus Lee');
+  // Keyed server, but the sample day's hold is demo money: it was never authorized in PayPal, so it is labeled (demo).
+  assert.equal(B.holdIsDemo(confirmed), true);
+  const money = B.withBusiness(business, () => B.moneySummary({ days: 7, presetId: 'cleaning' }));
+  assert.equal(money.demo, false, 'the server itself has keys');
+  assert.equal(money.onHoldLabel, '$50 (demo)');
+  assert.equal(money.paidOutLabel, '$0');
   const r = await B.refund(confirmed.id, { reason: 'test', notify: false });
   assert.ok(r.refunded > 0);
   assert.match(r.reference, /^DEMO-(REFUND|VOID)-[0-9A-F]{6}$/, "one reference: a refund, or a released deposit hold");

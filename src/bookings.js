@@ -1278,6 +1278,11 @@ export async function payoutForBooking(bookingId) {
   return store.getBooking(b.id);
 }
 
+// True when what is on hold for this booking is simulated money (no PayPal keys, or sample-day/demo payments on a
+// keyed server): such a hold was never authorized in PayPal and is labeled "(demo)" wherever it is shown.
+const heldPayments = (b) => b.payments.filter((p) => p.status === 'completed' && p.hold?.status === 'authorized');
+export const holdIsDemo = (b) => !paypalReady || (heldPayments(b).length > 0 && heldPayments(b).every((p) => isDemoMoney(p)));
+
 // ---------------- owner money view ----------------
 export function moneySummary({ days = 7, presetId = null } = {}) {
   const since = Date.now() - days * 86400000;
@@ -1293,10 +1298,15 @@ export function moneySummary({ days = 7, presetId = null } = {}) {
   const tips = sum(done.map((p) => (p.tip || 0) - (p.refund?.tip || 0)));
   const pending = sum(payments.filter((p) => p.status === 'pending').map((p) => p.amount));
   const kept = sum(all.filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
-  const paidOut = sum(all.filter((b) => b.payout && b.payout.status !== 'no_payout_email' && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
-  // On a server without PayPal keys, holds and payouts are simulated: the figures carry a "(demo)" label.
+  const payouts = all.filter((b) => b.payout && b.payout.status !== 'no_payout_email' && Date.parse(b.payout.at) >= since);
+  const paidOut = sum(payouts.map((b) => b.payout.amount));
+  // Simulated holds and payouts (no PayPal keys, or demo money such as the sample day on a keyed server) carry a
+  // "(demo)" label; a real sandbox hold next to them does not.
   const demo = !paypalReady;
-  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, onHold, depositsKeptFromLateCancels: kept, paidOut, paidOutLabel: `${usd(paidOut)}${demo ? ' (demo)' : ''}`, onHoldLabel: `${usd(onHold)}${demo ? ' (demo)' : ''}`, demo };
+  const held = payments.filter((p) => p.status === 'completed' && p.hold?.status === 'authorized');
+  const onHoldDemo = demo || (held.length > 0 && held.every((p) => isDemoMoney(p)));
+  const paidOutDemo = demo || (payouts.length > 0 && payouts.every((b) => b.payout.simulated || b.payout.status === 'simulated'));
+  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, onHold, depositsKeptFromLateCancels: kept, paidOut, paidOutLabel: `${usd(paidOut)}${paidOutDemo ? ' (demo)' : ''}`, onHoldLabel: `${usd(onHold)}${onHoldDemo ? ' (demo)' : ''}`, demo, onHoldDemo, paidOutDemo };
 }
 
 // ---------------- dispute evidence ----------------

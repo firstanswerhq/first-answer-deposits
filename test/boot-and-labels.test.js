@@ -15,6 +15,7 @@ const store = await import('../src/store.js');
 const B = await import('../src/bookings.js');
 const S = await import('../src/setup.js');
 const { seedIfEmpty, hasSampleDay } = await import('../src/seed.js');
+const { localDate } = await import('../src/slots.js');
 const { presets, defaultPresetId } = await import('../src/business.js');
 const { default: app } = await import('../src/server.js');
 
@@ -43,6 +44,13 @@ test('an empty data store gets the sample day on boot; a store with any booking 
   assert.equal(first.bookings, 3);
   assert.ok(hasSampleDay(biz));
   assert.deepEqual(store.listBookings().map((b) => b.customerName).sort(), ['Marcus Lee', 'Priya Natarajan', 'Sarah Kim']);
+  // The sample day never takes tomorrow: the first chip ("tomorrow morning") gets the morning on a fresh boot.
+  const tomorrow = localDate(new Date(Date.now() + 86400000), biz.timezone);
+  assert.ok(store.listBookings().every((b) => localDate(new Date(b.slotStart), biz.timezone) !== tomorrow), 'sample bookings stay off tomorrow');
+  if (biz.openDays.includes(new Date(`${tomorrow}T12:00:00Z`).getUTCDay())) {
+    const morning = B.availableSlots(biz, { limit: 6, days: 2 }).find((s) => localDate(new Date(s.start), biz.timezone) === tomorrow);
+    assert.ok(morning && /9:00 AM/.test(morning.label), `tomorrow 9:00 AM is still open: ${morning?.label}`);
+  }
   // Not empty any more: nothing is added, and the button's own guard still answers "already".
   assert.deepEqual(await seedIfEmpty(biz), { bookings: 0, already: true });
   assert.equal(store.listBookings().length, 3);
@@ -105,6 +113,11 @@ test('setup: the city answer takes a time zone (Central by default); logo links 
   assert.deepEqual(S.applyAnswer('city', 'Denver, CO, Mountain time').patch, { city: 'Denver, CO', timezone: 'America/Denver' });
   assert.deepEqual(S.applyAnswer('city', 'Boise, ID (America/Boise)').patch, { city: 'Boise, ID', timezone: 'America/Boise' });
   assert.equal(S.parseTimezone('Miami, FL, EST'), 'America/New_York');
+  // State abbreviations and city names that contain a zone word are left alone.
+  assert.deepEqual(S.applyAnswer('city', 'Hartford, CT').patch, { city: 'Hartford, CT', timezone: 'America/Chicago' });
+  assert.deepEqual(S.applyAnswer('city', 'Mountain View, CA').patch, { city: 'Mountain View, CA', timezone: 'America/Chicago' });
+  assert.deepEqual(S.applyAnswer('city', 'Billings, MT').patch, { city: 'Billings, MT', timezone: 'America/Chicago' });
+  assert.deepEqual(S.applyAnswer('city', 'Portland, OR, pst').patch, { city: 'Portland, OR', timezone: 'America/Los_Angeles' });
   assert.equal(S.cleanLogoUrl('http://x.example/logo.png'), '');
   assert.equal(S.cleanLogoUrl('https://x.example/logo.png'), 'https://x.example/logo.png');
   const bad = S.applyAnswer('brand', 'green, logo http://x.example/logo.png');

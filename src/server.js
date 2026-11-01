@@ -112,8 +112,10 @@ function publicBooking(b) {
     totals: B.totals(b),
     // What is owed right now: the deposit while a booking is held, the balance after that.
     owedNow: B.owedNow(b),
-    // A no-keys server never authorized anything in PayPal: say so wherever the hold figure is shown.
-    hold: B.totals(b).onHold > 0 ? `${B.usd(B.totals(b).onHold)} held in PayPal${paypalReady ? '' : ' (demo)'}` : '',
+    // A simulated hold (no PayPal keys, or the sample day on a keyed server) was never authorized in PayPal: say so
+    // wherever the hold figure is shown. The label follows the payment, not the server.
+    hold: B.totals(b).onHold > 0 ? `${B.usd(B.totals(b).onHold)} held in PayPal${B.holdIsDemo(b) ? ' (demo)' : ''}` : '',
+    holdDemo: B.totals(b).onHold > 0 ? B.holdIsDemo(b) : false,
     bookedBy: b.bookedBy || null,
     assistantLimit: b.mandate ? { limit: b.mandate.limit, spent: b.mandate.spent || 0, status: b.mandate.status, simulated: Boolean(b.mandate.demo) } : null,
     disputes: (b.disputes || []).map((d) => ({ id: d.id, status: d.status, detail: d.detail, at: d.at })),
@@ -443,7 +445,7 @@ app.get('/api/events', (req, res) => {
 // a thrown error is ours (500, logged, generic message).
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  if (res.headersSent) return;
+  if (res.headersSent) return next(err);
   if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) return res.status(400).json({ error: 'The request body is not valid JSON.' });
   if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'The request body is too large.' });
   console.error(err);

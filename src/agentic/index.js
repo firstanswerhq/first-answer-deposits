@@ -5,7 +5,7 @@
 import * as B from '../bookings.js';
 import { mountMcp, baseFor, cors } from './mcp.js';
 import { mountDiscovery } from './discovery.js';
-import { assistantTurn, getSession, agentName, friendlyError } from './assistant.js';
+import { assistantTurn, getSession, agentName, friendlyError, publicTrace } from './assistant.js';
 import { getModel } from '../agent/model.js';
 import { makeRateLimiter } from '../client-ip.js';
 
@@ -30,11 +30,12 @@ export function mountAgentic(app) {
     });
   });
 
-  // A reload keeps the thread.
-  app.get('/api/assistant/:sessionId', (req, res) => {
+  // A reload keeps the thread; the page also polls this while a turn runs. Rate-limited like the turns, and the
+  // trace never carries booking_key (or anything else secret-like) out of the server.
+  app.get('/api/assistant/:sessionId', rateLimit(120, 60 * 1000), (req, res) => {
     const s = getSession(String(req.params.sessionId));
     if (!s) return res.status(404).json({ error: 'No such session' });
-    res.json({ bizId: s.bizId, history: s.history, trace: s.trace });
+    res.json({ bizId: s.bizId, history: s.history, trace: publicTrace(s.trace) });
   });
 
   app.post('/api/assistant', rateLimit(40, 10 * 60 * 1000), async (req, res) => {

@@ -38,6 +38,20 @@ export function getSession(id) {
   return sessions.get(id) || null;
 }
 
+// What the page gets to see of a trace: the rows as recorded, minus anything secret-like in a result
+// (booking_key lets anyone move or cancel the booking over MCP; a GET on the session id must not hand it out).
+const SECRET_KEY = /(^|_)(key|secret|token|password|passcode)$/i;
+function stripSecrets(v) {
+  if (Array.isArray(v)) return v.map(stripSecrets);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const [k, x] of Object.entries(v)) if (!SECRET_KEY.test(k)) out[k] = stripSecrets(x);
+    return out;
+  }
+  return v;
+}
+export const publicTrace = (rows) => rows.map((e) => ({ ...e, args: stripSecrets(e.args || {}), result: stripSecrets(e.result) }));
+
 function session(id, bizId) {
   let s = sessions.get(id);
   if (!s || (bizId && s.bizId !== bizId)) {
@@ -52,7 +66,7 @@ function session(id, bizId) {
 // Every call is recorded for the protocol trace the page shows: tool, args, result.
 async function connect(url, trace, headers = {}) {
   const client = new Client({ name: 'customer-assistant', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }));
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }), { timeout: TOOL_TIMEOUT_MS });
   return {
     client,
     async call(tool, args = {}) {
@@ -440,6 +454,26 @@ async function modelTurn(s, text, url, trace, model, headers) {
     const tools = await mcp.tools();
     const messages = s.history.slice(-20).map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
     messages.push({ role: 'user', content: text });
+    // One trace row per tool result, pushed as each step finishes so the page sees the calls while the turn runs.
+    let approval = null;
+    const record = (tr) => {
+      const out = tr.output || {};
+      let data = out.structuredContent;
+      if (data === undefined) {
+        try {
+          data = JSON.parse(out.content?.find((c) => c.type === 'text')?.text || '');
+        } catch {
+          data = out;
+        }
+      }
+      trace.push({ tool: tr.toolName, args: tr.input || {}, result: data, error: Boolean(out.isError) });
+      if (tr.toolName === 'book_appointment' && data?.approval_url) {
+        approval = { url: data.approval_url, amount: data.approval_amount, bookingId: data.booking_id };
+        s.booking = { id: data.booking_id, key: data.booking_key, slotStart: data.slot_start, approvalUrl: data.approval_url, amount: data.approval_amount };
+      }
+      if ((tr.toolName === 'get_booking_status' || tr.toolName === 'reschedule_booking') && data?.approval_url) approval = { url: data.approval_url, amount: data.approval_amount, bookingId: data.booking_id };
+      if (tr.toolName === 'pay_balance') approval = data?.payment_made ? null : data?.approval_url ? { url: data.approval_url, amount: data.amount || data.approval_amount, bookingId: data.booking_id, label: 'Final bill' } : approval;
+    };
     const result = await generateText({
       model,
       system: `You are the customer's personal AI assistant (your name is ${agentName()}). The customer wants you to book a local service business for them. The business's booking system is available as tools over MCP.
@@ -453,28 +487,10 @@ Style: 1 to 3 short plain sentences, no markdown, no lists.`,
       temperature: 0.2,
       maxOutputTokens: 400,
       abortSignal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+      onStepFinish: (step) => {
+        for (const tr of step.toolResults || []) record(tr);
+      },
     });
-    let approval = null;
-    for (const step of result.steps) {
-      for (const tr of step.toolResults || []) {
-        const out = tr.output || {};
-        let data = out.structuredContent;
-        if (data === undefined) {
-          try {
-            data = JSON.parse(out.content?.find((c) => c.type === 'text')?.text || '');
-          } catch {
-            data = out;
-          }
-        }
-        trace.push({ tool: tr.toolName, args: tr.input || {}, result: data, error: Boolean(out.isError) });
-        if (tr.toolName === 'book_appointment' && data?.approval_url) {
-          approval = { url: data.approval_url, amount: data.approval_amount, bookingId: data.booking_id };
-          s.booking = { id: data.booking_id, key: data.booking_key, slotStart: data.slot_start, approvalUrl: data.approval_url, amount: data.approval_amount };
-        }
-        if ((tr.toolName === 'get_booking_status' || tr.toolName === 'reschedule_booking') && data?.approval_url) approval = { url: data.approval_url, amount: data.approval_amount, bookingId: data.booking_id };
-        if (tr.toolName === 'pay_balance') approval = data?.payment_made ? null : data?.approval_url ? { url: data.approval_url, amount: data.amount || data.approval_amount, bookingId: data.booking_id, label: 'Final bill' } : approval;
-      }
-    }
     return { reply: (result.text || '').trim() || 'Done.', approval };
   } finally {
     await mcp.close();
@@ -526,5 +542,5 @@ export async function assistantTurn({ sessionId, text, bizId, base, loopback = n
     } else out = { reply: friendlyError(err.message), approval: null };
   }
   s.history.push({ role: 'assistant', text: out.reply, at: new Date().toISOString(), approval: out.approval || null });
-  return { reply: out.reply, trace: [...trace], traceTotal: s.trace.length, approval: out.approval || null, endpoint: url, assistant: agentName(), mode: m ? 'model' : 'scripted' };
+  return { reply: out.reply, trace: publicTrace(trace), traceTotal: s.trace.length, approval: out.approval || null, endpoint: url, assistant: agentName(), mode: m ? 'model' : 'scripted' };
 }
