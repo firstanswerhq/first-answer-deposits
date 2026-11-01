@@ -1,0 +1,14 @@
+# Keeps the free-tier Render demo awake during judging (Dec 1 to 15) by touching the health endpoint every 10 minutes.
+name: keep the demo awake
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/health
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 https://first-answer-deposits.onrender.com/api/health || true)
+          echo "health returned $code"
