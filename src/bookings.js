@@ -102,7 +102,12 @@ export function latestBookingForLead(leadId) {
 export function findBookingsByName(name) {
   const q = String(name || '').toLowerCase().trim();
   if (!q) return [];
-  return store.listBookings().filter((b) => (b.customerName || '').toLowerCase().includes(q));
+  const all = store.listBookings();
+  // A full name the owner typed wins: "refund Sarah Kim" must not pick up a different Sarah. A first name alone
+  // ("Sarah") still lists every Sarah so the owner is asked which one.
+  const exact = /\s/.test(q) ? all.filter((b) => (b.customerName || '').toLowerCase().trim() === q) : [];
+  if (exact.length) return exact;
+  return all.filter((b) => (b.customerName || '').toLowerCase().includes(q));
 }
 
 // ---------------- money math ----------------

@@ -29,7 +29,7 @@ ${snapshot(business)}
 
 HOW TO WORK:
 - Use the tools to do what the owner asks, then reply in 1 to 3 short sentences that say exactly what you did: names, amounts, times, and PayPal reference numbers when there are any. No markdown.
-- Never invent bookings, names or numbers. If a name matches more than one booking (two Sarahs), list them and ask which one before doing anything.
+- Never invent bookings, names or numbers. Search with the whole name exactly as the owner typed it ("Sarah Kim", not "Sarah"). If a name still matches more than one booking (two Sarahs), list them and ask which one before doing anything.
 - Refunds and no-shows move money, so they take two steps: call the tool without confirmed to get the exact question (like "Refund $260 to Sarah Kim? Reply YES"), send that question to the owner word for word, and only after the owner replies YES call it again with confirmed: true. The tool refuses a confirmed call without that YES. Partial refunds are fine when the owner gives an amount.
 - "Done at Sarah's" or "finished Sarah" means mark_job_done, which texts Sarah her balance link with an optional tip. If her appointment hasn't happened yet, the tool asks first the same way.
 - "Sarah paid $210 cash" means record_outside_payment so nobody chases her.
