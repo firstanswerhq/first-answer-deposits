@@ -14,6 +14,10 @@ import { internalHeaders } from '../visitor.js';
 export { parseName };
 
 const sessions = new Map();
+// A tool call that gets no answer in this long is given up (the business's booking system is on the same host, so a
+// healthy call takes well under a second); a whole model turn gets 60 s before the human sees a plain message.
+const TOOL_TIMEOUT_MS = 25000;
+const TURN_TIMEOUT_MS = 60000;
 const lower = (s) => String(s || '').toLowerCase();
 const usd = (n) => `$${Number(n).toFixed(Number(n) % 1 ? 2 : 0)}`;
 
@@ -52,7 +56,7 @@ async function connect(url, trace, headers = {}) {
   return {
     client,
     async call(tool, args = {}) {
-      const r = await client.callTool({ name: tool, arguments: args });
+      const r = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: TOOL_TIMEOUT_MS });
       const text = r.content?.find((c) => c.type === 'text')?.text || '';
       let data = r.structuredContent;
       if (data === undefined) {
@@ -446,6 +450,7 @@ Style: 1 to 3 short plain sentences, no markdown, no lists.`,
       stopWhen: stepCountIs(8),
       temperature: 0.2,
       maxOutputTokens: 400,
+      abortSignal: AbortSignal.timeout(TURN_TIMEOUT_MS),
     });
     let approval = null;
     for (const step of result.steps) {
@@ -478,35 +483,46 @@ Style: 1 to 3 short plain sentences, no markdown, no lists.`,
 // What the human sees when the booking system errors: its plain-words message, never raw JSON-RPC or HTTP noise.
 export function friendlyError(message) {
   const m = String(message || '').replace(/^MCP error -?\d+:\s*/i, '').trim();
+  if (/timed? ?out|timeout|aborted|AbortError/i.test(m)) {
+    return "The business's booking system took too long to answer, so nothing was booked or charged. Please try again in a moment.";
+  }
   if (!m || /jsonrpc|^\s*[{[]|HTTP error|Error POSTing|status code|ECONN|fetch failed|429|Too many requests|Internal server error|-32\d{3}/i.test(m)) {
     return "The business's booking system is busy right now, so nothing was booked or charged. Please try again in a minute.";
   }
   return `The business's booking system said: ${m}`;
 }
 
-export async function assistantTurn({ sessionId, text, bizId, base, visitorId = null }) {
+export async function assistantTurn({ sessionId, text, bizId, base, loopback = null, visitorId = null }) {
   const s = session(sessionId, bizId);
+  // The endpoint the page shows is the public one; the calls themselves go over loopback when the server knows its
+  // own port (no DNS, TLS or proxy hop on the way back to itself), with the public address passed along for links.
   const url = `${base}/mcp/${s.bizId}`;
+  const callUrl = loopback ? `${loopback}/mcp/${s.bizId}` : url;
   // This demo assistant runs inside the server: its MCP calls carry the internal secret (no shared public rate
   // limit) and the visitor's id (so their Reset demo clears what they booked). See visitor.js.
-  const headers = internalHeaders(visitorId);
+  const headers = internalHeaders(visitorId, { publicBase: loopback ? base : '' });
+  // Each call lands in the session's trace as it happens, so the page can show it while the turn is still running.
   const trace = [];
+  const push = trace.push.bind(trace);
+  trace.push = (...entries) => {
+    s.trace.push(...entries);
+    return push(...entries);
+  };
   s.history.push({ role: 'user', text, at: new Date().toISOString() });
   const m = getModel();
   let out;
   try {
-    out = m ? await modelTurn(s, text, url, trace, m.model, headers) : await scriptedTurn(s, text, url, trace, headers);
+    out = m ? await modelTurn(s, text, callUrl, trace, m.model, headers) : await scriptedTurn(s, text, callUrl, trace, headers);
   } catch (err) {
     if (m) {
       console.error(`Assistant model failed (${m.name}): ${err.message}. Using the scripted planner.`);
       try {
-        out = await scriptedTurn(s, text, url, trace, headers);
+        out = await scriptedTurn(s, text, callUrl, trace, headers);
       } catch (err2) {
         out = { reply: friendlyError(err2.message), approval: null };
       }
     } else out = { reply: friendlyError(err.message), approval: null };
   }
   s.history.push({ role: 'assistant', text: out.reply, at: new Date().toISOString(), approval: out.approval || null });
-  s.trace.push(...trace);
-  return { reply: out.reply, trace, approval: out.approval || null, endpoint: url, assistant: agentName(), mode: m ? 'model' : 'scripted' };
+  return { reply: out.reply, trace: [...trace], traceTotal: s.trace.length, approval: out.approval || null, endpoint: url, assistant: agentName(), mode: m ? 'model' : 'scripted' };
 }

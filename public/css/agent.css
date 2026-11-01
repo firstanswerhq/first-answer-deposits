@@ -120,3 +120,7 @@ footer { color: #8b90b8; }
 .approve .skip { display: block; width: 100%; margin-top: 8px; background: none; border: 1px dashed #c9cdf2; color: var(--muted); border-radius: 10px; padding: 8px; font-size: 12.5px; cursor: pointer; }
 .approve .skip:hover { color: var(--ink); border-color: var(--brand-1); }
 .approve .limit-note { margin: 8px 0 0; font-size: 12.5px; color: #1f7a45; font-weight: 600; }
+
+/* A note under the typing dots when the first reply is slow (free hosting tier). */
+#typing.typing { flex-wrap: wrap; align-items: center; max-width: 85%; }
+#typing .hint { flex-basis: 100%; margin-top: 8px; font-size: 12px; line-height: 1.4; color: var(--muted); }

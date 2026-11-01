@@ -43,7 +43,9 @@ export function mountAgentic(app) {
     if (!sessionId || !text) return res.status(400).json({ error: 'sessionId and text are required.' });
     const bizId = req.body?.bizId && B.businessById(String(req.body.bizId)) ? String(req.body.bizId) : undefined;
     try {
-      res.json(await assistantTurn({ sessionId, text, bizId, base: baseFor(req), visitorId: req.visitorId || null }));
+      // The assistant talks to this same server: loopback skips the public hostname (DNS, TLS, the host's proxy).
+      const loopback = req.socket?.localPort ? `http://127.0.0.1:${req.socket.localPort}` : null;
+      res.json(await assistantTurn({ sessionId, text, bizId, base: baseFor(req), loopback, visitorId: req.visitorId || null }));
     } catch (err) {
       console.error('assistant', err);
       res.status(500).json({ error: friendlyError(err.message) });

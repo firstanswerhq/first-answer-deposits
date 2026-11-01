@@ -368,7 +368,10 @@ export function cors(req, res, next) {
 
 // Where this server is reachable from the caller's point of view. Local runs and tests listen on a port
 // that config.publicUrl may not know about, so the request's own host wins there.
+// The demo assistant calls over loopback and names the public address it was reached on (internal callers only).
 export function baseFor(req) {
+  const told = String(req.get('x-fad-public-base') || '');
+  if (told && /^https?:\/\/[^\s/]+$/.test(told) && isInternal(req)) return told;
   const host = req.get('host') || '';
   const local = /^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(host);
   return local ? `${req.protocol}://${host}` : config.publicUrl;

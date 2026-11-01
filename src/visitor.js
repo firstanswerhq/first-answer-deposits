@@ -9,8 +9,10 @@ const INTERNAL_SECRET = crypto.randomBytes(32).toString('hex');
 const VID = /^[a-f0-9]{24}$/;
 const COOKIE = 'fad_vid';
 
-export function internalHeaders(visitorId) {
-  return { 'x-fad-internal': INTERNAL_SECRET, ...(visitorId && VID.test(visitorId) ? { 'x-fad-visitor': visitorId } : {}) };
+// `publicBase`: the demo assistant calls MCP over loopback for speed, so it tells the server which public address
+// the links it returns (approval_url) should carry. Only an internal caller is believed (see baseFor in mcp.js).
+export function internalHeaders(visitorId, { publicBase = '' } = {}) {
+  return { 'x-fad-internal': INTERNAL_SECRET, ...(visitorId && VID.test(visitorId) ? { 'x-fad-visitor': visitorId } : {}), ...(publicBase ? { 'x-fad-public-base': publicBase } : {}) };
 }
 
 export function isInternal(req) {

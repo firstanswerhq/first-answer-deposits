@@ -22,6 +22,9 @@ let info = null;
 let sessionId = null;
 let busy = false;
 let watching = null;
+// How many of the session's trace entries are on screen: calls show up live while a turn runs (polled), and the
+// final reply fills in whatever is left.
+let traceShown = 0;
 
 const mem = {
   get: (k) => {
@@ -65,6 +68,17 @@ function typing(on) {
     $('#thread').appendChild(el);
     $('#thread').scrollTop = $('#thread').scrollHeight;
   } else if (!on && el) el.remove();
+}
+
+// The free hosting tier is slow on the first turn: say so under the dots after a few seconds instead of leaving them blinking.
+function typingHint() {
+  const el = $('#typing');
+  if (!el || el.querySelector('.hint')) return;
+  const p = document.createElement('div');
+  p.className = 'hint';
+  p.textContent = 'The assistant is talking to the business over MCP. The first reply can take 30-60 seconds on the free hosting tier.';
+  el.appendChild(p);
+  $('#thread').scrollTop = $('#thread').scrollHeight;
 }
 
 // The human-approval card. Polls the payment so the card flips to "paid" when they approve in the other tab.
@@ -222,8 +236,20 @@ function addSeparator(text) {
 async function playTrace(trace) {
   for (const entry of trace) {
     addCall(entry);
+    traceShown++;
     await new Promise((r) => setTimeout(r, 420));
   }
+}
+
+// While a turn runs, show the calls the assistant has made so far (the server records each one as it happens).
+async function pollTrace() {
+  try {
+    const r = await api(`/api/assistant/${sessionId}`);
+    for (const entry of r.trace.slice(traceShown)) {
+      addCall(entry);
+      traceShown++;
+    }
+  } catch {}
 }
 
 // ---------- turns ----------
@@ -235,16 +261,25 @@ async function send(text) {
   bubble('user', text);
   typing(true);
   addSeparator(`“${text.length > 48 ? text.slice(0, 46) + '…' : text}”`);
+  const hint = setTimeout(typingHint, 5000);
+  const poll = setInterval(pollTrace, 2000);
+  const before = traceShown;
   try {
     const r = await api('/api/assistant', { method: 'POST', body: { sessionId, text, bizId } });
-    await playTrace(r.trace || []);
+    clearInterval(poll);
+    // The turn's calls are the last r.trace.length in the session; some were already shown live.
+    const total = r.traceTotal ?? before + (r.trace || []).length;
+    await playTrace((r.trace || []).slice(Math.max(0, traceShown - (total - (r.trace || []).length))));
+    traceShown = total;
     typing(false);
     bubble('assistant', r.reply);
     if (r.approval) approvalCard(r.approval);
   } catch (err) {
     typing(false);
-    bubble('assistant', err.message.includes('Too many') ? err.message : 'Something went wrong talking to the business. Try again.');
+    bubble('assistant', err.message.includes('Too many') ? err.message : /too long|timed out/i.test(err.message) ? err.message : 'Something went wrong talking to the business. Try again.');
   } finally {
+    clearTimeout(hint);
+    clearInterval(poll);
     busy = false;
     $('#live-dot').classList.remove('busy');
   }
@@ -264,6 +299,7 @@ async function start(fresh = false) {
   busy = false;
   if (watching) clearInterval(watching);
   $('#thread').innerHTML = '';
+  traceShown = 0;
   $('#trace').innerHTML = '<li class="trace-empty" id="trace-empty">Waiting for the first call. Every MCP tool call the assistant makes to the business shows up here: the tool, what it sent, what came back.</li>';
   try {
     info = await api(`/api/assistant/info?biz=${encodeURIComponent(bizId)}`);
@@ -306,6 +342,7 @@ async function start(fresh = false) {
       if (m.approval) approvalCard(m.approval);
     }
     for (const entry of restored.trace) addCall(entry, { animate: false });
+    traceShown = restored.trace.length;
   } else {
     bubble('assistant', `Hi! I can book ${info.business.name} for you. Tell me what you need and when, and I'll handle the business. You'll only need to approve the deposit.`);
   }
