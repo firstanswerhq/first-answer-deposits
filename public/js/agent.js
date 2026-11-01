@@ -10,7 +10,7 @@ const PRESETS = [
 ];
 const CUSTOMER = { cleaning: ['Sarah', 'her'], detailing: ['Marcus', 'his'], hvac: ['Priya', 'her'], other: ['Alex', 'their'] };
 const PROMPTS = {
-  cleaning: ["Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah.", 'Did I pay yet?', 'Pay the final bill and add a $20 tip', 'Move it to Saturday afternoon'],
+  cleaning: ["Book a deep clean for my 3-bedroom tomorrow morning, keep it under $300. I'm Sarah.", 'Did I pay yet?', 'Pay the final bill and add a $20 tip', 'Move it to Saturday afternoon'],
   detailing: ["Full detail on my SUV this week, I'm Marcus", 'Is it confirmed?', 'Pay the final bill and add a $15 tip', 'Cancel it'],
   hvac: ["AC tune-up for one system, next Tuesday morning, I'm Priya", 'What do I still owe?', 'Pay the final bill', 'Move it to Wednesday'],
   other: ['Book me the first open time this week. I\'m Alex.', 'Is it confirmed?', 'Move it to tomorrow'],

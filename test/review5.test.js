@@ -149,7 +149,7 @@ test('a done job owing money with no open link gets one (remind and pay_balance 
 });
 
 // ---------- 7. the agent demo under load ----------
-const CHIP = "Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah.";
+const CHIP = "Book a deep clean for my 3-bedroom tomorrow morning, keep it under $300. I'm Sarah.";
 const sid = () => `r5-${Math.random().toString(36).slice(2)}`;
 test('the agent demo keeps booking past 20 a minute and with 8 visitors at once (internal MCP calls skip the public limit)', async () => {
   store.resetAll();

@@ -180,16 +180,16 @@ test("the customer's scripted assistant books through MCP end to end and hands b
     const r = await fetch(`${base}/api/assistant`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     return r.json();
   };
-  const r = await post({ sessionId: 'test-sarah', bizId: 'cleaning', text: "Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah." });
+  const r = await post({ sessionId: 'test-sarah', bizId: 'cleaning', text: "Book a deep clean for my 3-bedroom tomorrow morning, keep it under $300. I'm Sarah." });
   assert.deepEqual(
     r.trace.map((t) => t.tool),
     ['get_business_info', 'get_quote', 'check_availability', 'book_appointment'],
   );
   assert.equal(r.trace[1].args.size, '3 bedrooms');
-  assert.equal(r.trace[2].args.day, 'friday');
+  assert.equal(r.trace[2].args.day, 'tomorrow');
   assert.equal(r.trace[3].args.max_total, 300);
   assert.equal(r.trace[3].args.customer_name, 'Sarah');
-  assert.match(r.trace[3].result.appointment, /^Fri.*AM$/);
+  assert.match(r.trace[3].result.appointment, /AM$/);
   assert.ok(r.approval, 'approval returned');
   assert.equal(r.approval.amount, 50);
   assert.match(r.approval.url, /\/p\/pay_/);
@@ -198,6 +198,8 @@ test("the customer's scripted assistant books through MCP end to end and hands b
   assert.equal(r.endpoint, `${base}/mcp/cleaning`);
   const booking = store.getBooking(r.approval.bookingId);
   assert.equal(booking.status, 'held');
+  // Tomorrow is inside PayPal's 3-day honor period, so the documented first chip's deposit is a hold, not a charge.
+  assert.equal(B.intentFor(booking, booking.payments[0]), 'authorize');
   assert.equal(booking.customerName, 'Sarah');
   assert.equal(booking.source, 'agent');
 

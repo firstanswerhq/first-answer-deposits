@@ -363,11 +363,13 @@ async function scriptedTurn(s, text, url, trace, headers) {
     }
     let slot = f.slot || null;
     let swapped = null; // set when the exact time asked for was taken and the nearest open one was held instead
+    let closed = false; // the day asked for had no open times at all (closed that day, or already full)
     const tried = new Set();
     // retry > 0: a time just got taken; pick at random among the few nearest open times.
     const findSlot = async (retry = 0) => {
       const av = await mcp.call('check_availability', { day: f.day && f.day !== 'any' ? f.day : undefined, count: 8 });
       const open = av.slots.filter((x) => !tried.has(x.start));
+      if (!retry && f.day && f.day !== 'any' && !av.slots.length) closed = true;
       const pick = chooseSlot(open, f.day, f.when);
       if (pick.slot && !retry) return pick.slot;
       let near = retry ? null : pick.nearest;
@@ -419,7 +421,7 @@ async function scriptedTurn(s, text, url, trace, headers) {
     const dayFull = nearest && !String(r.appointment).startsWith(nearest);
     const asked = askedPhrase(f.day, f.when);
     const reply = [
-      dayFull ? `This ${dayWords(f.day)} is fully booked, so I held the closest open time instead.` : swapped ? `${asked ? `${asked} was taken` : 'That time was taken'}, so I held the closest open time instead.` : '',
+      dayFull ? `This ${dayWords(f.day)} is fully booked, so I held the closest open time instead.` : swapped ? `${closed ? `Nothing was open ${dayWords(f.day).toLowerCase() || 'then'}` : asked ? `${asked} was taken` : 'That time was taken'}, so I held the closest open time instead.` : '',
       `Done. I held ${what} with ${biz.name} for ${r.appointment}.`,
       `Total ${usd(r.total)}: a ${usd(r.deposit)} deposit now and ${usd(r.total - r.deposit)} after the job.`,
       `I can't pay the deposit for you. Approve the ${usd(r.deposit)} in PayPal (card, Venmo or Pay Later work too) and the time is yours. Free to cancel or move until ${r.free_cancel_until}.`,

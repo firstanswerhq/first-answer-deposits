@@ -131,7 +131,7 @@ test('a hold is captured when the booking moves past the window or the honor per
 
 test("the assistant pays the final bill inside the human's limit, shows the check, and asks when it is over", async () => {
   store.resetAll();
-  const HEADLINE = "Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah.";
+  const HEADLINE = "Book a deep clean for my 3-bedroom tomorrow morning, keep it under $300. I'm Sarah.";
   const booked = await assistant({ sessionId: 'limit-1', bizId: 'cleaning', text: HEADLINE });
   const payId = booked.approval.url.split('/p/')[1];
   const page = await call('GET', `/api/pay/${payId}`);
@@ -172,7 +172,7 @@ test("the assistant pays the final bill inside the human's limit, shows the chec
 
 test('over the limit, or with no limit, nothing is paid and the human gets a final-bill approval', async () => {
   store.resetAll();
-  const HEADLINE = "Book a deep clean for my 3-bedroom this Friday morning, keep it under $300. I'm Sarah.";
+  const HEADLINE = "Book a deep clean for my 3-bedroom tomorrow morning, keep it under $300. I'm Sarah.";
   const one = await assistant({ sessionId: 'limit-over', bizId: 'cleaning', text: HEADLINE });
   await call('POST', `/api/pay/${one.approval.url.split('/p/')[1]}/capture`, { body: { mandate: { limit: 100 } } });
   await call('POST', `/api/owner/bookings/${one.approval.bookingId}/done`, { biz: 'cleaning' });
