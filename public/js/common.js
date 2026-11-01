@@ -157,3 +157,21 @@ export function applyBrand(brand, { mark = null, name = null, powered = null } =
   }
   if (powered) powered.textContent = `Powered by ${b.poweredBy || 'First Answer'}`;
 }
+
+// ---------- live status ----------
+// One line fed by /api/health: "PayPal: sandbox connected · AI: Claude · live", or "demo mode" when a key is missing.
+export function statusLine(h) {
+  const paypalOn = h.paypal && !/^demo/i.test(h.paypal);
+  const aiOn = Boolean(h.aiReady);
+  const paypal = paypalOn ? `PayPal: ${h.paypal} connected` : 'PayPal: demo mode';
+  const ai = aiOn ? `AI: ${h.ai}` : 'AI: scripted demo';
+  return `${paypal} · ${ai} · ${paypalOn && aiOn ? 'live' : 'demo mode'}`;
+}
+export async function liveStatus(el) {
+  if (!el) return;
+  try {
+    el.textContent = statusLine(await api('/api/health'));
+  } catch {
+    el.textContent = '';
+  }
+}

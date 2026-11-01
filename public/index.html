@@ -43,6 +43,7 @@
         <a class="btn secondary" href="/text">Text the business, as a customer</a>
         <a class="btn secondary" href="/owner">Open the owner's phone</a>
       </div>
+      <p class="live-status" id="live-status" aria-live="polite"></p>
     </div>
   </section>
   <main>
@@ -103,5 +104,9 @@
     </div>
   </main>
   <footer>First Answer · built for any business that runs on leads: cleaners, detailers, HVAC, lawn care, salons and more.</footer>
+  <script type="module">
+    import { liveStatus } from '/js/common.js';
+    liveStatus(document.getElementById('live-status'));
+  </script>
 </body>
 </html>
