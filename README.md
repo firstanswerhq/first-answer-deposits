@@ -168,7 +168,7 @@ npm test
 
 With no `.env` at all, the app runs in demo mode (demo checkout, scripted AI).
 
-Tests: `npm test` (99 passing; node:test, end-to-end in demo mode plus a fake PayPal for the keyed paths).
+Tests: `npm test` (100 passing; node:test, end-to-end in demo mode plus a fake PayPal for the keyed paths).
 
 ### Environment variables
 
