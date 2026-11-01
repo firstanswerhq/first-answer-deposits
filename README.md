@@ -1,12 +1,52 @@
 # First Answer Deposits
 
+[![tests](https://github.com/firstanswerhq/first-answer-deposits/actions/workflows/test.yml/badge.svg)](https://github.com/firstanswerhq/first-answer-deposits/actions/workflows/test.yml)
+
 **AI can buy products. Now it can book your cleaner, and PayPal handles the money.**
 
-Any small service business (cleaners, detailers, HVAC, lawn care, salons, anyone who lives on leads) becomes bookable three ways: by text, by phone call, and **by any AI assistant** over MCP. The AI quotes from the real price list, offers real open times, books the job and sends one PayPal link for the deposit. Only the customer can approve the deposit. For jobs in the next few days it is a **PayPal hold** (authorized, not charged) that is captured on the final bill or a no-show and released on a free cancel. At that approval the customer can also give their assistant a **spending limit for this booking**: after the job, the assistant pays the final bill and tip through the business's `pay_balance` tool only if it fits inside the limit (payments on one booking are checked and charged one at a time, so racing calls can't go over it), and asks the human otherwise. Everything else (moving the time, extra work, refunds, splitting the bill, invoices by email, chargebacks) follows rules the customer agreed to, in the same thread. The owner runs it by texting an AI office manager that asks "Refund $292 ($260 paid plus the $32 tip) to Sarah Kim? Reply YES" before money moves, and, once they add a PayPal payout email, gets paid out when a job is paid in full.
+A customer's own AI assistant books a small service business over MCP: it reads the real price list, checks real open times and holds one. The human approves the deposit as a PayPal hold (authorized, not charged) and can grant the assistant a per-booking spending limit, so after the job it pays the final bill and tip only inside that limit and asks otherwise. The owner runs the whole thing by text, through an AI office manager that asks "Refund $292 to Sarah Kim? Reply YES" before any money moves.
 
 Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/). Runs on the PayPal **sandbox** only. No real money moves.
 
-**Live demo:** https://first-answer-deposits.onrender.com (free tier: the first request can take about a minute to wake the server). Pay with any PayPal sandbox personal account or a [test card](https://developer.paypal.com/tools/sandbox/card-testing/). To approve a deposit, log in with this PayPal sandbox buyer (test account, no real money): email `sb-bhex353636307@personal.example.com`, password `.Z^e0ppl`, or pay as a guest with a test card from [PayPal's card testing page](https://developer.paypal.com/tools/sandbox/card-testing/).
+**Live demo:** https://first-answer-deposits.onrender.com (free tier: the first request can take about a minute to wake the server). To approve a deposit, log in with this PayPal sandbox buyer (test account, no real money): email `sb-bhex353636307@personal.example.com`, password `.Z^e0ppl`. Or pay as a guest with a test card from [PayPal's card testing page](https://developer.paypal.com/tools/sandbox/card-testing/), or with any other PayPal sandbox personal account.
+
+## 60-second path
+
+1. Open [`/agent`](https://first-answer-deposits.onrender.com/agent) and tap the first chip. The assistant calls the business over MCP (watch the protocol trace), gets a quote, checks availability and holds a time. It cannot pay the deposit.
+2. Tap **Approve the $50 deposit in PayPal**. On the payment page tick **"Also let (your assistant) pay the final bill and tip for this booking, up to $260"** and pay (sandbox buyer login above, a test card, or the demo checkout).
+3. Back on `/agent`, tap **Skip ahead (demo): the business finishes the job**, then **"Pay the final bill and add a $20 tip"**. The trace shows `pay_balance` with the limit check: `limit $260 · spent $0 · this $230 → within the limit`.
+4. Open [`/owner`](https://first-answer-deposits.onrender.com/owner) and text "refund Sarah Kim". It answers "Refund $292 ($260 paid plus the $32 tip) to Sarah Kim? Reply YES" and nothing moves until you do.
+
+![The assistant books over MCP; the human gets one PayPal approval card and the trace shows book_appointment held](docs/screenshots/01-agent-trace.png)
+
+![After the job, pay_balance pays the final bill and tip inside the limit the human set at the deposit](docs/screenshots/03-pay-balance-limit-check.png)
+
+More screenshots in [`docs/screenshots/`](docs/screenshots/): the spending-limit checkbox on the payment page, the owner's "Reply YES" exchange, the customer's booking record, and setup by text.
+
+## How it fits together
+
+```
+  customer texts/calls     payment page      owner's phone      any AI assistant (MCP client)
+        /text                  /p/:id            /owner          POST /mcp/<business>
+          |                      |                 |                     |
+          v                      v                 v                     v
+   agent/customer.js        public/js/pay.js   agent/owner.js    agentic/ (MCP server per business,
+   (AI or scripted)                            (AI or scripted)   UCP / agent-card / llms.txt discovery)
+          |                      |                 |                     |
+          +----------------------+--------+--------+---------------------+
+                                          |
+                                          v
+                              src/bookings.js  (the one booking + money engine:
+                              quotes, holds, limits, refunds, splits, payouts)
+                                          |
+                                          v
+                              src/paypal.js  (Orders v2, Payments v2, Vault,
+                              Invoicing, Payouts, Disputes, webhooks)
+```
+
+## What it does, in full
+
+Any small service business (cleaners, detailers, HVAC, lawn care, salons, anyone who lives on leads) becomes bookable three ways: by text, by phone call, and **by any AI assistant** over MCP. The AI quotes from the real price list, offers real open times, books the job and sends one PayPal link for the deposit. Only the customer can approve the deposit. For jobs in the next few days it is a **PayPal hold** (authorized, not charged) that is captured on the final bill or a no-show and released on a free cancel. At that approval the customer can also give their assistant a **spending limit for this booking**: after the job, the assistant pays the final bill and tip through the business's `pay_balance` tool only if it fits inside the limit (payments on one booking are checked and charged one at a time, so racing calls can't go over it), and asks the human otherwise. Everything else (moving the time, extra work, refunds, splitting the bill, invoices by email, chargebacks) follows rules the customer agreed to, in the same thread. The owner runs it by texting an AI office manager that asks "Refund $292 ($260 paid plus the $32 tip) to Sarah Kim? Reply YES" before money moves, and, once they add a PayPal payout email, gets paid out when a job is paid in full.
 
 ## Try it in two minutes
 
@@ -76,6 +116,9 @@ Every call below is in `src/paypal.js` and is made only when the server has PayP
 
 ### Deposit holds
 
+<details>
+<summary>When a deposit is a PayPal hold, and when it is captured, voided or released</summary>
+
 PayPal honors an authorization for 3 days (it stays valid up to 29, but funds are only reliably there during the honor period). So:
 
 - A deposit is a **hold** only when the job ends at least 6 hours before the 3-day honor period does (the job and its final bill both fit inside it). Later jobs are **captured at booking**, exactly as before. The payment page says which one it is.
@@ -85,9 +128,16 @@ PayPal honors an authorization for 3 days (it stays valid up to 29, but funds ar
 - A split deposit whose other share never comes in: when the unpaid hold is released (it expires, the owner releases it, or the paid share's honor period is ending), the share that was paid is voided (a hold) or refunded (captured), and the customer is told.
 - Holds count toward the customer's bill but not toward the owner's "money in" or payouts until captured; the owner page shows them as "held in PayPal".
 
+</details>
+
 ### Owner safety
 
+<details>
+<summary>How the owner's AI is kept from moving money on its own</summary>
+
 The owner's AI office manager (and its scripted fallback) works only on the business it runs for. Refunds, no-shows and marking a job done before its appointment time take two steps: it asks the exact question with the exact amount ("Refund $260 to Sarah Kim? Reply YES"), and the question is kept with a fingerprint of the booking. With the AI, the tool refuses a confirmed call unless the owner's own latest message, sent after that question, is a plain YES; a model that asks and confirms in the same turn is refused, and the question is always shown to the owner word for word. If the booking changed between the question and the YES (the customer paid, another refund went out), nothing moves and the owner is asked again with the new amount. Questions expire after 15 minutes. Two customers with the same first name get a "Which Sarah?" question. A no-show can't be marked before the appointment time.
+
+</details>
 
 ### AI used
 
