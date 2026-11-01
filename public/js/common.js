@@ -159,13 +159,13 @@ export function applyBrand(brand, { mark = null, name = null, powered = null } =
 }
 
 // ---------- live status ----------
-// One line fed by /api/health: "PayPal: sandbox connected · AI: Claude · live", or "demo mode" when a key is missing.
+// One line fed by /api/health: "PayPal: sandbox · AI: Claude · sandbox demo", or "demo mode" when a key is missing.
 export function statusLine(h) {
   const paypalOn = h.paypal && !/^demo/i.test(h.paypal);
   const aiOn = Boolean(h.aiReady);
-  const paypal = paypalOn ? `PayPal: ${h.paypal} connected` : 'PayPal: demo mode';
+  const paypal = paypalOn ? `PayPal: ${h.paypal}` : 'PayPal: demo mode';
   const ai = aiOn ? `AI: ${h.ai}` : 'AI: scripted demo';
-  return `${paypal} · ${ai} · ${paypalOn && aiOn ? 'live' : 'demo mode'}`;
+  return `${paypal} · ${ai} · ${paypalOn && aiOn ? 'sandbox demo, no real money' : 'demo mode'}`;
 }
 export async function liveStatus(el) {
   if (!el) return;
