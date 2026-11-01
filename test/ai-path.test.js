@@ -215,7 +215,7 @@ test('a second AI key is a real backup: when the first provider throws, the same
   const m = getModel();
   assert.match(m.name, /^Groq/);
   assert.equal(m.provider, 'groq');
-  assert.deepEqual(m.backups, ['Gemini (gemini-3.5-flash-lite)']);
+  assert.deepEqual(m.backups, [`Gemini (${config.ai.googleModel})`]);
   assert.match(modelLabel(), /backup: Gemini/);
   // Swap the real providers for fakes: the first always fails, the second answers.
   const calls = [];

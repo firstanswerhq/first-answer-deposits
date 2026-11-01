@@ -44,6 +44,7 @@ function withFailover(models) {
   return {
     ...primary,
     backups: backups.map((b) => b.name),
+    providers: models,
     model: {
       specificationVersion: primary.model.specificationVersion,
       provider: primary.model.provider,
@@ -58,7 +59,8 @@ function withFailover(models) {
 let cached;
 export function getModel() {
   if (cached !== undefined) return cached;
-  const order = config.ai.provider && builders[config.ai.provider] ? [config.ai.provider, ...Object.keys(builders).filter((k) => k !== config.ai.provider)] : ['anthropic', 'meta', 'groq', 'google'];
+  const ORDER = ['anthropic', 'meta', 'groq', 'google'];
+  const order = builders[config.ai.provider] ? [config.ai.provider, ...ORDER.filter((k) => k !== config.ai.provider)] : ORDER;
   const models = order.map((id) => {
     const m = builders[id]();
     return m ? { ...m, provider: id } : null;
@@ -80,17 +82,30 @@ export function modelLabel() {
   return m.backups?.length ? `${m.name}; backup: ${m.backups.join(', ')}` : m.name;
 }
 
-// One tiny call at startup so a wrong key or model name shows up in the logs and on /api/health right away.
+// One tiny call per configured AI at startup so a wrong key or model name shows up in the logs and on /api/health
+// right away, even when a backup would have covered for it mid-turn.
 export const aiStatus = { checked: false, ok: null, error: null };
 export async function checkModel() {
   const m = getModel();
   if (!m) return aiStatus;
-  try {
-    const r = await generateText({ model: m.model, prompt: 'Reply with the single word OK.', maxOutputTokens: 20 });
-    Object.assign(aiStatus, { checked: true, ok: true, error: null, sample: (r.text || '').slice(0, 20) });
-  } catch (err) {
-    Object.assign(aiStatus, { checked: true, ok: false, error: String(err.message || err).slice(0, 300) });
-    console.error(`AI check failed for ${m.name}: ${aiStatus.error}`);
+  const providers = m.providers || [m];
+  const results = [];
+  for (const p of providers) {
+    try {
+      const r = await generateText({ model: p.model, prompt: 'Reply with the single word OK.', maxOutputTokens: 20, maxRetries: 1 });
+      results.push({ name: p.name, ok: true, error: null, sample: (r.text || '').slice(0, 20) });
+    } catch (err) {
+      results.push({ name: p.name, ok: false, error: String(err.message || err).slice(0, 300) });
+      console.error(`AI check failed for ${p.name}: ${results.at(-1).error}`);
+    }
   }
+  const first = results[0];
+  Object.assign(aiStatus, {
+    checked: true,
+    ok: results.some((r) => r.ok),
+    error: first.ok ? null : first.error,
+    sample: results.find((r) => r.ok)?.sample || '',
+    ...(results.length > 1 ? { providers: results, runningOn: first.ok ? first.name : results.find((r) => r.ok)?.name || null } : {}),
+  });
   return aiStatus;
 }
