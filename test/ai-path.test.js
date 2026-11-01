@@ -205,3 +205,31 @@ test("the customer's assistant on the model path records each MCP call as it hap
     server.close();
   }
 });
+
+test('a second AI key is a real backup: when the first provider throws, the same turn runs on the next one', async () => {
+  const { getModel, _setModelForTests, modelLabel } = await import('../src/agent/model.js');
+  const { config } = await import('../src/config.js');
+  const saved = { ...config.ai };
+  Object.assign(config.ai, { provider: '', anthropicKey: '', metaKey: '', groqKey: 'gsk_test', googleKey: 'AIza_test' });
+  _setModelForTests(undefined);
+  const m = getModel();
+  assert.match(m.name, /^Groq/);
+  assert.equal(m.provider, 'groq');
+  assert.deepEqual(m.backups, ['Gemini (gemini-3.5-flash-lite)']);
+  assert.match(modelLabel(), /backup: Gemini/);
+  // Swap the real providers for fakes: the first always fails, the second answers.
+  const calls = [];
+  const fail = { doGenerate: async () => { calls.push('groq'); throw new Error('429 rate limit'); } };
+  const ok = { doGenerate: async () => { calls.push('gemini'); return { text: 'hi' }; } };
+  // Rebuild the wrapper over the fakes through the same code path used in production.
+  const { _withFailoverForTests } = await import('../src/agent/model.js');
+  const wrapped = _withFailoverForTests([{ model: fail, name: 'A', provider: 'groq' }, { model: ok, name: 'B', provider: 'google' }]);
+  const r = await wrapped.model.doGenerate({});
+  assert.equal(r.text, 'hi');
+  assert.deepEqual(calls, ['groq', 'gemini']);
+  // Both down: the last error surfaces so the callers' scripted fallback takes over.
+  const both = _withFailoverForTests([{ model: fail, name: 'A', provider: 'groq' }, { model: fail, name: 'A2', provider: 'google' }]);
+  await assert.rejects(() => both.model.doGenerate({}), /429/);
+  Object.assign(config.ai, saved);
+  _setModelForTests(null);
+});

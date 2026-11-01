@@ -140,7 +140,7 @@ The owner's AI office manager (and its scripted fallback) works only on the busi
 
 ### AI used
 
-Any model through the Vercel AI SDK: **Claude** (`ANTHROPIC_API_KEY`), **Meta Llama** (`META_API_KEY`, the Llama API's OpenAI-compatible endpoint), **Groq** (`GROQ_API_KEY`, free tier) or **Gemini** (`GOOGLE_GENERATIVE_AI_API_KEY`). The customer agent, the owner agent and the customer's own assistant all use tool calling over the same booking engine, so the AI can never invent a price or a time. With no key set, a scripted bot runs the same flows so the app can be tried anywhere.
+Any model through the Vercel AI SDK: **Claude** (`ANTHROPIC_API_KEY`), **Meta Llama** (`META_API_KEY`, the Llama API's OpenAI-compatible endpoint), **Groq** (`GROQ_API_KEY`, free tier) or **Gemini** (`GOOGLE_GENERATIVE_AI_API_KEY`). The customer agent, the owner agent and the customer's own assistant all use tool calling over the same booking engine, so the AI can never invent a price or a time. Set more than one key and the rest are live backups: if the first provider fails mid-turn (rate limit, outage), the same call retries on the next one, and if every AI is down the scripted bot answers instead, so a customer is never left on read. With no key set, the scripted bot runs the same flows so the app can be tried anywhere.
 
 ### Agentic commerce
 
@@ -168,7 +168,7 @@ npm test
 
 With no `.env` at all, the app runs in demo mode (demo checkout, scripted AI).
 
-Tests: `npm test` (100 passing; node:test, end-to-end in demo mode plus a fake PayPal for the keyed paths).
+Tests: `npm test` (101 passing; node:test, end-to-end in demo mode plus a fake PayPal for the keyed paths).
 
 ### Environment variables
 
@@ -179,7 +179,7 @@ Tests: `npm test` (100 passing; node:test, end-to-end in demo mode plus a fake P
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | PayPal REST app credentials. Both empty: demo mode (demo checkout, simulated holds, invoices and payouts, each labeled) | empty |
 | `PAYPAL_ENV` | `sandbox` or `live`; anything but `live` is the sandbox | `sandbox` |
 | `PAYPAL_WEBHOOK_ID` | Webhook id used to verify PayPal's signature on `/api/webhooks/paypal` | empty |
-| `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `META_API_KEY` (or `LLAMA_API_KEY`) | One AI key is enough. None: the scripted bots run the same flows | empty |
+| `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `META_API_KEY` (or `LLAMA_API_KEY`) | One AI key is enough; extra keys are automatic backups (`AI_PROVIDER` picks the first). None: the scripted bots run the same flows | empty |
 | `AI_PROVIDER` | Which provider to use when more than one key is set: `anthropic`, `meta`, `groq` or `google` | first key found |
 | `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GOOGLE_MODEL`, `META_MODEL`, `META_API_BASE` | Model names (and the OpenAI-compatible base for Llama) | see `.env.example` |
 | `OWNER_PASSCODE` | Passcode for `/owner` and the owner API. **Empty: the owner routes are open (the judging configuration).** | empty |

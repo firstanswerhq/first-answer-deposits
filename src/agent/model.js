@@ -22,20 +22,52 @@ const builders = {
     },
 };
 
+// If the first AI fails mid-turn (rate limit, outage, bad key), the same call retries on the next configured one,
+// so a second free-tier key is a real backup. Every configured key is tried in order; the last error is thrown.
+function withFailover(models) {
+  if (models.length < 2) return models[0];
+  const [primary, ...backups] = models;
+  const attempt = async (method, options) => {
+    let lastErr;
+    for (const m of models) {
+      try {
+        return await m.model[method](options);
+      } catch (err) {
+        lastErr = err;
+        if (options?.abortSignal?.aborted) throw err; // the turn timed out: no point retrying elsewhere
+        const next = models[models.indexOf(m) + 1];
+        if (next) console.error(`${m.name} failed: ${String(err.message || err).slice(0, 200)}. Retrying on ${next.name}.`);
+      }
+    }
+    throw lastErr;
+  };
+  return {
+    ...primary,
+    backups: backups.map((b) => b.name),
+    model: {
+      specificationVersion: primary.model.specificationVersion,
+      provider: primary.model.provider,
+      modelId: primary.model.modelId,
+      supportedUrls: primary.model.supportedUrls,
+      doGenerate: (options) => attempt('doGenerate', options),
+      doStream: (options) => attempt('doStream', options),
+    },
+  };
+}
+
 let cached;
 export function getModel() {
   if (cached !== undefined) return cached;
-  const order = config.ai.provider && builders[config.ai.provider] ? [config.ai.provider] : ['anthropic', 'meta', 'groq', 'google'];
-  cached = null;
-  for (const id of order) {
+  const order = config.ai.provider && builders[config.ai.provider] ? [config.ai.provider, ...Object.keys(builders).filter((k) => k !== config.ai.provider)] : ['anthropic', 'meta', 'groq', 'google'];
+  const models = order.map((id) => {
     const m = builders[id]();
-    if (m) {
-      cached = { ...m, provider: id };
-      break;
-    }
-  }
+    return m ? { ...m, provider: id } : null;
+  }).filter(Boolean);
+  cached = models.length ? withFailover(models) : null;
   return cached;
 }
+
+export const _withFailoverForTests = withFailover;
 
 // Tests swap in a mock model to exercise the AI path without a key.
 export function _setModelForTests(m) {
@@ -43,7 +75,9 @@ export function _setModelForTests(m) {
 }
 
 export function modelLabel() {
-  return getModel()?.name || 'Scripted demo mode (no AI key set)';
+  const m = getModel();
+  if (!m) return 'Scripted demo mode (no AI key set)';
+  return m.backups?.length ? `${m.name}; backup: ${m.backups.join(', ')}` : m.name;
 }
 
 // One tiny call at startup so a wrong key or model name shows up in the logs and on /api/health right away.
