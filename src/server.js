@@ -12,7 +12,7 @@ import { ownerCommand } from './agent/owner.js';
 import { modelLabel, checkModel, aiStatus } from './agent/model.js';
 import * as setup from './setup.js';
 import * as connect from './connect.js';
-import { seedSampleDay, resetBusinessDemo } from './seed.js';
+import { seedSampleDay, seedIfEmpty, resetBusinessDemo } from './seed.js';
 import { mountAgentic } from './agentic/index.js';
 import { checkPublicUrl } from './safe-fetch.js';
 import { newOwnerKey, hashKey, ownerKeyOk, credsFrom, resetAllowed, maskSecret } from './owner-auth.js';
@@ -450,6 +450,9 @@ setInterval(() => B.sendRebookNudges().catch((e) => console.error('rebook', e.me
 if (process.env.FAD_NO_LISTEN !== '1') {
   app.listen(config.port, () => {
     console.log(`First Answer Deposits running on ${config.publicUrl}`);
+    seedIfEmpty(presets[defaultPresetId])
+      .then((r) => r.bookings && console.log(`Loaded the sample day for ${presets[defaultPresetId].name} (empty data store).`))
+      .catch((e) => console.error('sample day', e.message));
     console.log(`PayPal: ${paypalReady ? config.paypal.env : 'demo mode (no keys)'} | AI: ${modelLabel()}`);
     checkModel().then((s) => s.checked && console.log(`AI check: ${s.ok ? 'working' : `FAILED (${s.error})`}`));
   });

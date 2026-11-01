@@ -49,6 +49,14 @@ export async function seedSampleDay(business) {
   return { bookings: made.length };
 }
 
+// A fresh or restarted server (the free tier's disk is wiped on restart) loads the default business's sample day
+// on its own, so the owner page and the walkthrough ("done at Sarah's", "refund Sarah") work without a click.
+// Nothing happens when any booking exists: a server with real data is never touched.
+export async function seedIfEmpty(business) {
+  if (store.listBookings().length) return { bookings: 0, already: true };
+  return seedSampleDay(business);
+}
+
 // True while PayPal holds something open for this booking: an order not yet paid, an invoice still payable (or one
 // whose cancel PayPal has not confirmed), a hold, a saved wallet with an active limit, or captured money not fully
 // refunded. Such a booking is never deleted by a reset, so a reset never strands money or a live PayPal object.
