@@ -10,6 +10,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22
+      - key: NODE_ENV
+        value: production
       - key: PUBLIC_URL
         sync: false # https://<your-service>.onrender.com
       - key: PAYPAL_CLIENT_ID

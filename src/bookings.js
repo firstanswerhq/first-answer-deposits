@@ -853,6 +853,18 @@ export async function refund(bookingId, { amount = null, reason = '', newStatus 
   }
   if (fullyRefunded) endMandate(b.id, 'revoked', 'The booking was refunded.');
   store.logActivity(`Refunded ${what} to ${b.customerName}${reason ? ` (${reason})` : ''}.${tipNote}`, { bookingId: b.id, kind: 'refund' });
+  // The owner was already paid out for this job: the refund came from the platform account, so the booking
+  // records what the owner now owes back. A bookkeeping line only, no PayPal call.
+  const paidOut = b.payout && b.payout.status !== 'no_payout_email' ? Number(b.payout.amount || 0) : 0;
+  if (paidOut > 0 && total > 0) {
+    const owed = round2(Math.min(paidOut, (b.clawback?.amount || 0) + total) - (b.clawback?.amount || 0));
+    if (owed > 0) {
+      const clawback = { amount: round2((b.clawback?.amount || 0) + owed), payout: paidOut, at: new Date().toISOString(), simulated: Boolean(b.payout.simulated) };
+      store.updateBooking(b.id, { clawback });
+      store.addTimeline(b.id, `Owner owes ${usd(clawback.amount)} back: ${usd(total)} was refunded after the ${usd(paidOut)} payout went out${b.payout.simulated ? ' (demo: simulated)' : ''}. Recorded against the business; no new PayPal call.`);
+      store.logActivity(`You owe ${usd(clawback.amount)} back on ${b.customerName}'s job: it was refunded after the ${usd(paidOut)} payout.`, { bookingId: b.id, kind: 'clawback' });
+    }
+  }
   return { booking: store.getBooking(b.id), refunded: total, jobRefunded: jobBack, tipRefunded: tipBack, reference: ref, released: allReleased };
 }
 

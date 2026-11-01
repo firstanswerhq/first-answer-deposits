@@ -299,6 +299,15 @@ $('#bookings').addEventListener('click', async (e) => {
     if (reason === null) return;
     body.reason = reason;
   }
+  // Same check as the AI office manager: a job marked done before its appointment time gets a question first.
+  if (act === 'done' && bk?.slotStart && Date.parse(bk.slotStart) > Date.now()) {
+    const go = await ask({
+      title: `Mark ${name}'s job done now?`,
+      text: `${name}'s appointment is ${bk.appointment}, which hasn't happened yet. Marking it done texts them the final bill right away${bk.totals.onHold > 0 ? ' and charges the deposit hold' : ''}.`,
+      ok: 'Mark it done',
+    });
+    if (!go) return;
+  }
   if (act === 'demo-dispute') {
     const go = await ask({ title: `Test a dispute on ${name}'s payment?`, text: 'Plays a PayPal dispute on this demo booking so you can watch the AI send the evidence file. Demo only: no PayPal call.', ok: 'Open a test dispute' });
     if (!go) return;

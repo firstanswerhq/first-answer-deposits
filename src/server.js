@@ -439,6 +439,17 @@ app.get('/api/events', (req, res) => {
   });
 });
 
+// Anything that reaches here is answered in JSON with no stack trace: a malformed JSON body is the caller's (400);
+// a thrown error is ours (500, logged, generic message).
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (res.headersSent) return;
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) return res.status(400).json({ error: 'The request body is not valid JSON.' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'The request body is too large.' });
+  console.error(err);
+  res.status(err?.status || err?.statusCode || 500).json({ error: 'Something went wrong on our side. Please try again.' });
+});
+
 connect.startPushing();
 
 // ---------- background jobs ----------

@@ -11,7 +11,7 @@ const cap = (s) => String(s || '').trim().replace(/\s+/g, ' ').replace(/^\w/, (c
 export const STEPS = [
   { id: 'name', ask: "Let's set you up. What's your business called?" },
   { id: 'trade', ask: 'What do you do, in a few words? (lawn care, plumbing, dog grooming, photography...)' },
-  { id: 'city', ask: 'What city and state are you in?' },
+  { id: 'city', ask: 'What city and state are you in? Add your time zone if it is not Central (Eastern, Mountain, Pacific, or a name like America/Denver).' },
   { id: 'hours', ask: 'What days do you work, and what start times can customers book? For example: Mon-Fri, 8am, 11am and 2pm.' },
   { id: 'services', ask: 'Now your services and prices, one per line. For example:\nMowing: small yard $45, large yard $65\nAeration: $120' },
   { id: 'deposit', ask: 'How much should a customer pay to hold a time? A flat amount like $50, or a percent like 25%. (Or say "no deposit".)' },
@@ -32,7 +32,8 @@ const COLOR_NAMES = { red: '#d7263d', orange: '#f26b1d', yellow: '#e0a800', gold
 export function parseBrand(text) {
   const t = String(text || '').trim();
   if (!t || /^(skip|no|none|later|nope)\b/i.test(t)) return { color: '', logoUrl: '' };
-  const url = (t.match(/https?:\/\/\S+/i) || [''])[0].replace(/[),.;]+$/, '');
+  // https only (see cleanLogoUrl).
+  const url = (t.match(/https:\/\/\S+/i) || [''])[0].replace(/[),.;]+$/, '');
   let color = (t.match(/#(?:[0-9a-f]{6}|[0-9a-f]{3})\b/i) || [''])[0].toLowerCase();
   if (!color) {
     const word = Object.keys(COLOR_NAMES).find((c) => new RegExp(`\\b${c}\\b`, 'i').test(t.replace(url, '')));
@@ -130,6 +131,24 @@ export function parseDeposit(text) {
   return null;
 }
 
+// "Denver, CO, Mountain time" or "America/Denver" -> an IANA zone; anything else is Central (the default).
+const ZONE_WORDS = { eastern: 'America/New_York', central: 'America/Chicago', mountain: 'America/Denver', arizona: 'America/Phoenix', pacific: 'America/Los_Angeles', alaska: 'America/Anchorage', hawaii: 'Pacific/Honolulu' };
+export function parseTimezone(text) {
+  const t = String(text || '');
+  const iana = t.match(/\b([A-Z][A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\b/);
+  if (iana) {
+    try {
+      return new Intl.DateTimeFormat('en-US', { timeZone: iana[1] }).resolvedOptions().timeZone;
+    } catch {
+      // not a real zone: fall through to the words
+    }
+  }
+  const word = Object.keys(ZONE_WORDS).find((w) => new RegExp(`\\b${w}\\b`, 'i').test(t));
+  if (word) return ZONE_WORDS[word];
+  const abbr = t.match(/\b(E|C|M|P)[SD]?T\b/);
+  return abbr ? { E: 'America/New_York', C: 'America/Chicago', M: 'America/Denver', P: 'America/Los_Angeles' }[abbr[1]] : 'America/Chicago';
+}
+
 export function parseEmail(text) {
   const m = String(text || '').match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
   return m ? m[0].toLowerCase() : null;
@@ -144,8 +163,12 @@ export function applyAnswer(stepId, text, profile = {}) {
       return { ok: true, patch: { name: cap(t.replace(/^(it's|its|we are|we're|called)\s+/i, '')) } };
     case 'trade':
       return { ok: true, patch: { trade: t.toLowerCase().replace(/^(we do|we're|we are|i do)\s+/i, '').replace(/\.$/, '') || 'services' } };
-    case 'city':
-      return { ok: true, patch: { city: cap(t.replace(/^(in|we're in|i'm in)\s+/i, '')) } };
+    case 'city': {
+      const timezone = parseTimezone(t);
+      // The zone words come off the city ("Denver, CO, Mountain time" -> "Denver, CO").
+      const city = cap(t.replace(/^(in|we're in|i'm in)\s+/i, '').replace(/[,;(]?\s*(?:\b(?:eastern|central|mountain|arizona|pacific|alaska|hawaii)\b(?:\s+time(?:\s+zone)?)?|\b[ECMP][SD]?T\b|[A-Z][A-Za-z_]+\/[A-Za-z_\/]+)\s*\)?/gi, '').replace(/[,;\s]+$/, ''));
+      return { ok: true, patch: { city, timezone }, say: timezone === 'America/Chicago' ? undefined : `Got it, ${city}, on ${timezone.replace(/_/g, ' ')} time.` };
+    }
     case 'hours': {
       const h = parseHours(t);
       return { ok: true, patch: h, say: `Got it: ${h.openDays.map((d) => cap(DAYS[d])).join(', ')} with start times ${h.slotTimes.map(prettyTime).join(', ')}.` };
@@ -163,6 +186,7 @@ export function applyAnswer(stepId, text, profile = {}) {
     case 'brand': {
       const b = parseBrand(t);
       const parts = [b.logoUrl ? 'logo saved' : '', b.color ? `color ${b.color}` : ''].filter(Boolean);
+      if (!b.logoUrl && /\bhttp:\/\//i.test(t)) return { ok: false, say: 'The logo link needs to start with https:// (an http:// image would be blocked on the secure pages). Paste an https link, or say "skip".' };
       return { ok: true, patch: { brand: b }, say: parts.length ? `Looks good: ${parts.join(', ')}. Your customers will see it on the booking and payment pages.` : 'No problem, you can add a logo and color later from the owner page.' };
     }
     case 'payout': {
@@ -324,7 +348,8 @@ export async function profileFromText(text) {
 }
 
 // A logo link is shown on customer pages: http(s) only, no spaces, quotes or angle brackets, 500 characters at most.
+// Logo links are https only: customer pages are served over https, and a plain http image would be blocked as mixed content.
 export function cleanLogoUrl(v) {
   const logo = String(v || '').trim();
-  return /^https?:\/\/[^\s"'<>]+$/i.test(logo) ? logo.slice(0, 500) : '';
+  return /^https:\/\/[^\s"'<>]+$/i.test(logo) ? logo.slice(0, 500) : '';
 }
