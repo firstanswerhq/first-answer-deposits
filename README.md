@@ -20,13 +20,13 @@ All paths below are on the live demo, for example `https://first-answer-deposits
 | Set up a brand-new business by texting a few answers (name, hours, prices, deposit, logo and color, PayPal email) | `/setup` |
 | Landing page | `/` |
 
-Suggested walk-through:
+Suggested walk-through (the server loads a sample day for the demo cleaning business on its own when its data store is empty, so Sarah Kim, Marcus Lee and Priya Natarajan are already on the owner page; **Load a sample day** on `/owner` does the same by hand):
 
 1. Open `/agent`, tap the first chip ("Book a deep clean for my 3-bedroom tomorrow morning, keep it under $300. I'm Sarah."). Watch the protocol trace on the right: the assistant calls the business over MCP, gets a quote, checks real availability and holds a time. If someone already took tomorrow morning, it holds the closest open time and says so. Tomorrow is inside PayPal's 3-day honor period, so this deposit is a **hold** (authorized, not charged). It cannot pay the deposit. Tap **Approve the deposit in PayPal**. On the payment page, tick **"Also let (your assistant) pay the final bill and tip for this booking, up to $260"** and pay (sandbox account, test card, or the demo checkout).
 2. Back on `/agent`, tap **Skip ahead (demo): the business finishes the job**, then the chip **"Pay the final bill and add a $20 tip"**. The trace shows `pay_balance` with the limit check (`limit $260 · spent $0 · this $230 → within the limit`). Set a lower limit next time and it asks you instead.
-3. Open `/text` (a fresh customer) and text "I need a deep clean for a 2 bedroom", reply `1` for a time and your first name. Then text "Can we do Saturday instead?" and pick a number: the time moves and the deposit moves with it. On the payment page, try "Is this refundable?", "Split it with my roommate" or "Email me an invoice".
-4. Open `/owner`. Tap **Load a sample day** (once is enough; **Reset demo** clears what you made here plus the sample day and loads a fresh one; other visitors' bookings, and anything with an open PayPal order, invoice or hold, are left alone). Text "who owes me?", "what's on tomorrow?", "refund Sarah" (it asks "Refund $… to Sarah Kim? Reply YES" first), "done at Marcus" (his job is still ahead, so it asks before billing), "how did we do this week?". On a booking with captured money (not a deposit still on hold), **Test a dispute** (demo servers only) shows the AI sending the evidence file.
-5. Open `/setup` and set up your own business by texting eight answers. Give it a logo link and a color: every page your customers see (texts, booking record, payment page) carries your brand, with a small "Powered by First Answer" line.
+3. Open `/text` (a fresh customer) and text "I need a deep clean for a 2 bedroom", reply `1` for a time and your first name: now a booking exists. Then text "Can we do Saturday instead?" and pick a number: the time moves and the deposit moves with it. On the payment page, try "Is this refundable?", "Split it with my roommate" or "Email me an invoice".
+4. Open `/owner`. The sample day is already there (**Reset demo** clears what you made here plus the sample day and loads a fresh one; other visitors' bookings, and anything with an open PayPal order, invoice or hold, are left alone). Text "who owes me?", "what's on tomorrow?", "refund Sarah" (it asks "Refund $… to Sarah Kim? Reply YES" first), "done at Marcus" (his job is still ahead, so it asks before billing), "how did we do this week?". On a booking with captured money (not a deposit still on hold), **Test a dispute** (demo servers only) shows the AI sending the evidence file.
+5. Open `/setup` and set up your own business by texting eight answers (add your time zone with the city if it is not Central). Give it an https logo link and a color: every page your customers see (texts, booking record, payment page) carries your brand, with a small "Powered by First Answer" line.
 
 ### Sandbox test payments
 
@@ -97,7 +97,7 @@ Any model through the Vercel AI SDK: **Claude** (`ANTHROPIC_API_KEY`), **Meta Ll
 
 Every business gets:
 
-- an **MCP endpoint** (`POST /mcp/<business>`, Streamable HTTP) with tools to get the price sheet, check availability, quote, book, check status, reschedule and cancel;
+- an **MCP endpoint** (`POST /mcp/<business>`, Streamable HTTP) with tools to get the price sheet, check availability, quote, book, check status, reschedule, cancel and (within the human's limit) pay the balance;
 - discovery files at `/.well-known/ucp`, `/.well-known/agent-card.json` and `/llms.txt`;
 - a **human-approval step**: `book_appointment` holds the time and returns a PayPal approval link. Only the person can approve the deposit. The hold expires on its own if they don't.
 - **pay within a pre-approved limit**: at that approval the person can let their assistant pay this booking's final bill and tip, up to an amount they choose. After the job, `pay_balance` pays from the wallet PayPal saved with their consent only if the amount fits in what is left of the limit, and returns `limit_check` (limit, already spent, this payment, decision). Over the limit, or with no limit, nothing is paid and the human gets the approval link.
@@ -119,9 +119,29 @@ npm test
 
 With no `.env` at all, the app runs in demo mode (demo checkout, scripted AI).
 
+Tests: `npm test` (96 passing; node:test, end-to-end in demo mode plus a fake PayPal for the keyed paths).
+
+### Environment variables
+
+| Variable | What it does | Default |
+|---|---|---|
+| `PUBLIC_URL` | Public address of this app, used in every link (PayPal return, pay pages, MCP endpoint) | `http://localhost:3000` |
+| `PORT` | Port to listen on | `3000` |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | PayPal REST app credentials. Both empty: demo mode (demo checkout, simulated holds, invoices and payouts, each labeled) | empty |
+| `PAYPAL_ENV` | `sandbox` or `live`; anything but `live` is the sandbox | `sandbox` |
+| `PAYPAL_WEBHOOK_ID` | Webhook id used to verify PayPal's signature on `/api/webhooks/paypal` | empty |
+| `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `META_API_KEY` (or `LLAMA_API_KEY`) | One AI key is enough. None: the scripted bots run the same flows | empty |
+| `AI_PROVIDER` | Which provider to use when more than one key is set: `anthropic`, `meta`, `groq` or `google` | first key found |
+| `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GOOGLE_MODEL`, `META_MODEL`, `META_API_BASE` | Model names (and the OpenAI-compatible base for Llama) | see `.env.example` |
+| `OWNER_PASSCODE` | Passcode for `/owner` and the owner API. **Empty: the owner routes are open (the judging configuration).** | empty |
+| `ALLOW_RESET` | `1` turns on **Start over** (wipes every business's demo data); also on whenever `OWNER_PASSCODE` is set | off |
+| `DATA_FILE` | Where the JSON data store lives | `data/db.json` |
+| `HOLD_MINUTES` | How long an unpaid booking holds its time before it is released | `120` |
+| `NODE_ENV` | `production` on the host (set in `render.yaml`) | unset |
+
 ## Deploy (Render)
 
-`render.yaml` is included. Create a Web Service from this repo, then set `PUBLIC_URL`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID` (after adding `https://<your-app>/api/webhooks/paypal` as a webhook in the PayPal app) and one AI key in the Render dashboard. The free tier sleeps after 15 minutes; the first request wakes it, and its disk is not permanent, so demo data (and any business set up at `/setup`) resets when the service restarts. Leave `OWNER_PASSCODE` empty for judging so the owner page opens without a code.
+`render.yaml` is included. Create a Web Service from this repo, then set `PUBLIC_URL`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID` (after adding `https://<your-app>/api/webhooks/paypal` as a webhook in the PayPal app) and one AI key in the Render dashboard. The free tier sleeps after 15 minutes; the first request wakes it, and its disk is not permanent, so demo data (and any business set up at `/setup`) resets when the service restarts; the sample day is loaded again on its own. Leave `OWNER_PASSCODE` empty for judging so the owner page opens without a code.
 
 Subscribe the webhook to `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `INVOICING.INVOICE.PAID` and `CUSTOMER.DISPUTE.CREATED`. The sandbox app needs **Vault** (save payment methods) turned on for the assistant's spending limit, plus Invoicing, Payouts and Disputes access for those features.
 
