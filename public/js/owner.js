@@ -57,13 +57,16 @@ const ACTIONS = {
 };
 
 function kpis(s) {
+  // A no-keys server never held or paid out anything in PayPal: those figures are labeled (demo).
+  const demo = lastState?.health.paypal === 'demo mode' ? ' (demo)' : '';
   const tiles = [
     ['New leads', s.leads],
     ['Avg first reply', s.avgFirstReplySec === null ? '—' : s.avgFirstReplySec < 1 ? '&lt;1s' : `${s.avgFirstReplySec}s`],
     ['Deposits waiting', s.held],
     ['Confirmed', s.confirmed],
-    ['Money in (30 days)', `${money(s.money.gross)}${s.money.onHold ? `<div class="small muted" style="font-size:12px;font-weight:600">+ ${money(s.money.onHold)} held in PayPal</div>` : ''}`],
+    ['Money in (30 days)', `${money(s.money.gross)}${s.money.onHold ? `<div class="small muted" style="font-size:12px;font-weight:600">+ ${money(s.money.onHold)} held in PayPal${demo}</div>` : ''}`],
     ['Still owed', money(s.money.stillOwed)],
+    ...(s.money.paidOut ? [[`Paid out${demo}`, money(s.money.paidOut)]] : []),
   ];
   $('#kpis').innerHTML = tiles.map(([l, v]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
 }

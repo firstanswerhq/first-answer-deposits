@@ -31,7 +31,9 @@ function render() {
   const due = payment.amount + (payment.kind === 'balance' ? state.tip : 0);
   const rows = [];
   rows.push(['Total for the job', money(t.total)]);
-  if (t.onHold > 0) rows.push(['Deposit held in PayPal (not charged yet)', money(t.onHold)]);
+  // No PayPal keys on this server: the hold is simulated, and the row says so.
+  const demo = state.data.paypal ? '' : ' (demo)';
+  if (t.onHold > 0) rows.push([`Deposit held in PayPal${demo} (not charged yet)`, money(t.onHold)]);
   if (t.paid - (t.onHold || 0) > 0) rows.push(['Already paid', money(t.paid - (t.onHold || 0))]);
   if (payment.kind === 'deposit') {
     // Once this deposit is paid it is already inside t.paid, so only subtract it while it is still due.

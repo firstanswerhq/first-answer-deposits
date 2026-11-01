@@ -1282,7 +1282,9 @@ export function moneySummary({ days = 7, presetId = null } = {}) {
   const pending = sum(payments.filter((p) => p.status === 'pending').map((p) => p.amount));
   const kept = sum(all.filter((b) => b.depositKept && Date.parse(b.createdAt) >= since).map((b) => b.depositKept));
   const paidOut = sum(all.filter((b) => b.payout && b.payout.status !== 'no_payout_email' && Date.parse(b.payout.at) >= since).map((b) => b.payout.amount));
-  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, onHold, depositsKeptFromLateCancels: kept, paidOut };
+  // On a server without PayPal keys, holds and payouts are simulated: the figures carry a "(demo)" label.
+  const demo = !paypalReady;
+  return { days, gross, fees, refunds, tips, net: round2(gross - fees - refunds), stillOwed: pending, onHold, depositsKeptFromLateCancels: kept, paidOut, paidOutLabel: `${usd(paidOut)}${demo ? ' (demo)' : ''}`, onHoldLabel: `${usd(onHold)}${demo ? ' (demo)' : ''}`, demo };
 }
 
 // ---------------- dispute evidence ----------------

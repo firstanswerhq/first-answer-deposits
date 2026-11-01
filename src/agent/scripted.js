@@ -438,7 +438,7 @@ export async function scriptedOwnerReply(text) {
     }
     if (/(how did we do|summary|this week|money)/.test(t)) {
       const m = B.moneySummary({ days: 7, presetId: current.id });
-      return `Last 7 days: ${B.usd(m.gross)} in, ${B.usd(m.fees)} PayPal fees, ${B.usd(m.refunds)} refunded, ${B.usd(m.net)} net. ${B.usd(m.stillOwed)} still owed.${m.onHold ? ` ${B.usd(m.onHold)} in deposits held in PayPal, not charged yet.` : ''}`;
+      return `Last 7 days: ${B.usd(m.gross)} in, ${B.usd(m.fees)} PayPal fees, ${B.usd(m.refunds)} refunded, ${B.usd(m.net)} net. ${B.usd(m.stillOwed)} still owed.${m.onHold ? ` ${m.onHoldLabel} in deposits held in PayPal, not charged yet.` : ''}${m.paidOut ? ` ${m.paidOutLabel} paid out.` : ''}`;
     }
     if (/rebook|repeat/.test(t)) {
       const r = await B.sendRebookNudges({ force: true, presetId: current.id });

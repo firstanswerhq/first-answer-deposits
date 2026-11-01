@@ -112,7 +112,8 @@ function publicBooking(b) {
     totals: B.totals(b),
     // What is owed right now: the deposit while a booking is held, the balance after that.
     owedNow: B.owedNow(b),
-    hold: B.totals(b).onHold > 0 ? `${B.usd(B.totals(b).onHold)} held in PayPal` : '',
+    // A no-keys server never authorized anything in PayPal: say so wherever the hold figure is shown.
+    hold: B.totals(b).onHold > 0 ? `${B.usd(B.totals(b).onHold)} held in PayPal${paypalReady ? '' : ' (demo)'}` : '',
     bookedBy: b.bookedBy || null,
     assistantLimit: b.mandate ? { limit: b.mandate.limit, spent: b.mandate.spent || 0, status: b.mandate.status, simulated: Boolean(b.mandate.demo) } : null,
     disputes: (b.disputes || []).map((d) => ({ id: d.id, status: d.status, detail: d.detail, at: d.at })),

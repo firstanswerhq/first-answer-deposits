@@ -133,14 +133,15 @@ function watchPayment(card) {
       if (r.payment.status === 'completed') {
         clearInterval(watching);
         const held = r.payment.held === 'authorized';
+        const demo = r.paypal ? '' : ' (demo)'; // no PayPal keys on this server: the hold is simulated
         const limit = r.booking.assistantLimit;
         card.classList.add('paid');
         card.querySelector('.status').className = 'status confirmed';
-        card.querySelector('.status').textContent = held ? 'Held in PayPal · confirmed' : 'Paid · confirmed';
+        card.querySelector('.status').textContent = held ? `Held in PayPal${demo} · confirmed` : 'Paid · confirmed';
         card.querySelector('.btn').outerHTML = `<a class="btn secondary" href="${escapeHtml(r.bookingUrl)}" target="_blank" rel="noopener">View the booking</a>`;
         const limitLine = limit && limit.status === 'active' ? `<p class="limit-note">You let me pay the final bill and tip for this booking, up to ${money(limit.limit)}${limit.simulated ? ' (demo: simulated)' : ''}.</p>` : '';
         const isDeposit = card.dataset.kind === 'deposit';
-        card.querySelector('.fine').outerHTML = `<p class="fine"><strong>You approved ${money(r.payment.amount)} in PayPal${held ? ' as a hold' : ''}.</strong> ${escapeHtml(r.booking.appointment)} is confirmed.${held ? ' Nothing is charged until the job is done; a free cancel releases it.' : ''} The business saw it the same second.</p>${limitLine}`;
+        card.querySelector('.fine').outerHTML = `<p class="fine"><strong>You approved ${money(r.payment.amount)} in PayPal${held ? ` as a hold${demo}` : ''}.</strong> ${escapeHtml(r.booking.appointment)} is confirmed.${held ? ' Nothing is charged until the job is done; a free cancel releases it.' : ''} The business saw it the same second.</p>${limitLine}`;
         if (isDeposit && PRESETS.some((b) => b.id === bizId) && r.booking.status === 'confirmed') {
           const skip = document.createElement('button');
           skip.type = 'button';
@@ -149,7 +150,7 @@ function watchPayment(card) {
           skip.addEventListener('click', () => finishJob(card, skip));
           card.appendChild(skip);
         }
-        bubble('assistant', isDeposit ? `Your ${money(r.payment.amount)} deposit went through${held ? ' as a hold on your PayPal' : ''}. ${r.booking.appointment} is confirmed.` : `Thanks, the final bill is paid. You're all set.`);
+        bubble('assistant', isDeposit ? `Your ${money(r.payment.amount)} deposit went through${held ? ` as a hold on your PayPal${demo}` : ''}. ${r.booking.appointment} is confirmed.` : `Thanks, the final bill is paid. You're all set.`);
       } else if (['void', 'canceled'].includes(r.payment.status)) clearInterval(watching);
     } catch {}
   };
