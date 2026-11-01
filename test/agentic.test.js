@@ -156,14 +156,19 @@ test('discovery files describe the business, the MCP binding and the PayPal hand
   assert.equal(ucp.ucp.services['com.firstanswer.booking'].transport, 'mcp');
   assert.equal(ucp.ucp.services['com.firstanswer.booking'].endpoint, `${base}/mcp/detailing`);
   assert.equal(ucp.payment.handlers[0].name, 'com.paypal.checkout');
-  assert.equal(ucp.payment.handlers[0].agent_can_pay, false);
+  // Truthful: the agent cannot pay the deposit, and pays the balance only within a limit the human set.
+  assert.equal(ucp.payment.handlers[0].agent_can_pay, 'within_customer_limit');
+  assert.equal(ucp.payment.handlers[0].agent_can_pay_deposit, false);
+  assert.ok(ucp.ucp.services['com.firstanswer.booking'].tools.includes('pay_balance'));
   assert.ok(ucp.payment.handlers[0].supports.includes('pay_later'));
   assert.match(ucp.ucp.note, /Not a certified/);
   assert.equal(ucp.business.name, 'Gloss Boss Mobile Detailing');
 
   const card = await (await fetch(`${base}/.well-known/agent-card.json?biz=hvac`)).json();
   assert.equal(card.provider.organization, 'First Answer');
-  assert.deepEqual(card.skills.map((s) => s.id), ['availability', 'quote', 'book', 'changes']);
+  assert.deepEqual(card.skills.map((s) => s.id), ['availability', 'quote', 'book', 'changes', 'pay_balance']);
+  assert.ok(card.tools.includes('pay_balance'));
+  assert.equal(card.payment.agent_can_pay, 'within_customer_limit');
   assert.equal(card.url, `${base}/mcp/hvac`);
 
   const llms = await fetch(`${base}/llms.txt?biz=cleaning`);
@@ -172,6 +177,7 @@ test('discovery files describe the business, the MCP binding and the PayPal hand
   assert.match(text, /# Sparkle & Shine Home Cleaning/);
   assert.match(text, new RegExp(`POST ${base}/mcp/cleaning`));
   assert.match(text, /You cannot pay/);
+  assert.match(text, /pay_balance/);
 });
 
 test("the customer's scripted assistant books through MCP end to end and hands back one approval", async () => {
