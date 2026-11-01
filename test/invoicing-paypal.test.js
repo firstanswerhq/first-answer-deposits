@@ -1,4 +1,4 @@
-// Fifth review, real-mode money paths (PayPal keys set) against a fake PayPal that answers after 40 ms, so calls
+// Invoicing and racing payments, real-mode money paths (PayPal keys set) against a fake PayPal that answers after 40 ms, so calls
 // that race really do overlap: pay_balance racing itself, invoices paid on closed or replaced deposits, split
 // deposits released with a share paid, and payouts on a keyed server.
 // (Its own file: PayPal keys are read when the app loads.)

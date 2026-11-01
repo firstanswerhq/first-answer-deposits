@@ -1,5 +1,5 @@
-// Fixes from the mock judge's report: the one-tap demo on a shared server, the scripted bots, owner money
-// confirmations, the sample day, and honest labels. Demo mode (no PayPal or AI keys).
+// The demo walkthrough: the one-tap demo on a shared server, the scripted bots, owner money confirmations, the
+// sample day, and honest labels. Demo mode (no PayPal or AI keys).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';

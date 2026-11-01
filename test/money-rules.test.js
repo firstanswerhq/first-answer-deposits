@@ -1,4 +1,4 @@
-// Regression tests for the code-review fixes: money rules and security checks, all in demo mode.
+// Money rules and security checks (cancel windows, payouts, refund amounts, capture ownership, view-only links, safe URLs, setup profiles), all in demo mode.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';

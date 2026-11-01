@@ -1,4 +1,4 @@
-// Fifth review (demo mode): the owner's YES gates (stale questions and the AI asking and confirming in one turn),
+// Owner safety (demo mode): the owner's YES gates (stale questions and the AI asking and confirming in one turn),
 // split deposits released with a share paid, refunds after the job, the agent demo under load, Reset demo scoped
 // to the visitor, test disputes on holds, payouts, the vault id on public pages, invoice limits, no-shows early.
 import { test, before, after } from 'node:test';

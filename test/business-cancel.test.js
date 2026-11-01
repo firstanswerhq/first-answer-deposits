@@ -1,6 +1,5 @@
-// Regression tests for the fourth review of the review-fixes branch: deposit links after the business cancels,
-// closing a business-canceled unpaid booking, "Can't make it" on closed bookings, the owner table's business
-// scope, and refunds that include the tip.
+// Business cancels: deposit links after the business cancels, closing a business-canceled unpaid booking,
+// "Can't make it" on closed bookings, the owner table's business scope, and refunds that include the tip.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';

@@ -1,5 +1,5 @@
-// Regression tests for the second review of the review-fixes branch: customer cancel after the owner canceled,
-// one visitor's /setup not taking over the demo, rate limits keyed on the real visitor, SSRF gaps, small leaks.
+// Visitors and limits: customer cancel after the owner canceled, one visitor's /setup not taking over the demo,
+// rate limits keyed on the real visitor, SSRF gaps, small leaks.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';

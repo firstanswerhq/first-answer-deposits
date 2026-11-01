@@ -1,5 +1,5 @@
-// Regression tests for the third review of the review-fixes branch: the shared rate-limit backstop, the owner
-// page's business per request, paying for a canceled booking, webhook Content-Length, and tips on deposits.
+// Rate limits and scope: the shared rate-limit backstop, the owner page's business per request, paying for a
+// canceled booking, webhook Content-Length, and tips on deposits.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
