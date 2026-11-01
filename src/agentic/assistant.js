@@ -474,9 +474,14 @@ async function modelTurn(s, text, url, trace, model, headers) {
       if ((tr.toolName === 'get_booking_status' || tr.toolName === 'reschedule_booking') && data?.approval_url) approval = { url: data.approval_url, amount: data.approval_amount, bookingId: data.booking_id };
       if (tr.toolName === 'pay_balance') approval = data?.payment_made ? null : data?.approval_url ? { url: data.approval_url, amount: data.amount || data.approval_amount, bookingId: data.booking_id, label: 'Final bill' } : approval;
     };
+    // The chat history holds only words, not tool results, so the booking this session made is restated here:
+    // without it the model asks the customer for a booking_id and booking_key they never saw.
+    const known = s.booking
+      ? `\nThis session already made a booking: booking_id "${s.booking.id}", booking_key "${s.booking.key}"${s.booking.slotStart ? `, appointment ${s.booking.slotStart}` : ''}. Use exactly these for get_booking_status, reschedule_booking, cancel_booking and pay_balance. Never ask the customer for a booking id, key or approval link: you have them.`
+      : '';
     const result = await generateText({
       model,
-      system: `You are the customer's personal AI assistant (your name is ${agentName()}). The customer wants you to book a local service business for them. The business's booking system is available as tools over MCP.
+      system: `You are the customer's personal AI assistant (your name is ${agentName()}). The customer wants you to book a local service business for them. The business's booking system is available as tools over MCP.${known}
 How to work: call get_business_info first, then get_quote, then check_availability, then book_appointment with the exact slot_start. Pass the customer's budget as max_total if they gave one, and agent_name "${agentName()}". Use their name as customer_name; ask for it if you do not have it. Ask one short question when something is missing. If the exact time they asked for is taken, book the closest open time within their budget and tell them which time you held (they can move it); do not stall on a question.
 Money: you cannot pay the deposit. When book_appointment returns approval_url, tell the customer the total, the deposit due now, that only they can approve it in PayPal (card, Venmo and Pay Later work too, no account needed), and give the link. Never say the appointment is confirmed until get_booking_status says confirmed.
 After the job, if they ask you to pay the final bill (and maybe a tip), call pay_balance. It pays only inside the spending limit they pre-approved at the deposit; if it returns payment_made false, tell them why (over the limit, no limit, job not done) and give approval_url.

@@ -179,6 +179,27 @@ test("the customer's assistant on the model path records each MCP call as it hap
     assert.equal(get.trace.length, 3);
     assert.ok(!JSON.stringify(get.trace).includes('booking_key'));
     assert.ok(getSession('model-1').booking?.key, 'the server itself keeps the key for follow-ups');
+
+    // A later turn: the chat history carries no tool results, so the system prompt must restate the booking the
+    // session made (id + key), or the model asks the customer for a booking id they never saw.
+    const b = getSession('model-1').booking;
+    let followSystem = '';
+    const model2 = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        followSystem = options.prompt.find((m) => m.role === 'system').content;
+        const results = toolResults(options.prompt);
+        if (!results.length) return call('get_booking_status', { booking_id: b.id, booking_key: b.key });
+        return text('Still held, waiting on your deposit.');
+      },
+    });
+    _setModelForTests({ model: model2, name: 'mock', provider: 'anthropic' });
+    const res2 = await fetch(`${base}/api/assistant`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'model-1', bizId: 'cleaning', text: 'Did I pay yet?' }) });
+    const r2 = await res2.json();
+    assert.equal(r2.mode, 'model');
+    assert.ok(followSystem.includes(`booking_id "${b.id}"`) && followSystem.includes(`booking_key "${b.key}"`), 'the follow-up turn is told the booking id and key');
+    assert.ok(/never ask the customer for a booking id/i.test(followSystem));
+    assert.equal(r2.trace.at(-1).tool, 'get_booking_status');
+    assert.ok(!JSON.stringify(r2.trace).includes('booking_key'));
   } finally {
     _setModelForTests(null);
     server.close();
