@@ -477,7 +477,7 @@ async function modelTurn(s, text, url, trace, model, headers) {
     // The chat history holds only words, not tool results, so the booking this session made is restated here:
     // without it the model asks the customer for a booking_id and booking_key they never saw.
     const known = s.booking
-      ? `\nThis session already made a booking: booking_id "${s.booking.id}", booking_key "${s.booking.key}"${s.booking.slotStart ? `, appointment ${s.booking.slotStart}` : ''}. Use exactly these for get_booking_status, reschedule_booking, cancel_booking and pay_balance. Never ask the customer for a booking id, key or approval link: you have them.`
+      ? `\nThis session already made a booking: booking_id "${s.booking.id}", booking_key "${s.booking.key}"${s.booking.slotStart ? `, appointment ${s.booking.slotStart}` : ''}. Use exactly these for get_booking_status, reschedule_booking, cancel_booking and pay_balance. Never ask the customer for a booking id, key or approval link: you have them. Never repeat the booking_key to the customer or put it in your reply.`
       : '';
     const result = await generateText({
       model,
